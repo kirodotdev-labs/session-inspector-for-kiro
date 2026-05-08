@@ -1,0 +1,91 @@
+import { useState, useEffect } from "react";
+import { Sidebar } from "./components/Sidebar";
+import { SessionView } from "./components/SessionView";
+
+export interface Workspace {
+  id: string;
+  path: string;
+  name: string;
+  sessionCount: number;
+  sessions: { id: string; title: string; date: number }[];
+}
+
+export interface Action {
+  actionType: string;
+  actionState?: string;
+  input?: Record<string, any>;
+  output?: Record<string, any>;
+}
+
+export interface SessionDetail {
+  sessionId: string;
+  title: string;
+  model: string;
+  autonomyMode: string;
+  sessionType: string;
+  contextUsage: number;
+  workspacePath: string;
+  messageCount: number;
+  history: { role: string; content: string; executionId?: string; actions?: Action[] }[];
+}
+
+const API = "http://localhost:3001/api";
+
+function App() {
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [selectedSession, setSelectedSession] = useState<{
+    workspaceId: string;
+    sessionId: string;
+  } | null>(null);
+  const [session, setSession] = useState<SessionDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API}/workspaces`)
+      .then((r) => r.json())
+      .then(setWorkspaces);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedSession) return;
+    setLoading(true);
+    fetch(
+      `${API}/workspaces/${selectedSession.workspaceId}/sessions/${selectedSession.sessionId}`
+    )
+      .then((r) => r.json())
+      .then((d) => {
+        setSession(d);
+        setLoading(false);
+      });
+  }, [selectedSession]);
+
+  return (
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar
+        workspaces={workspaces}
+        selectedSession={selectedSession}
+        onSelect={(workspaceId, sessionId) =>
+          setSelectedSession({ workspaceId, sessionId })
+        }
+      />
+      <main className="flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
+            Loading session...
+          </div>
+        ) : session ? (
+          <SessionView session={session} />
+        ) : (
+          <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
+            <div className="text-center">
+              <p className="text-2xl font-light mb-2">Kiro Sessions Inspector</p>
+              <p className="text-sm">Select a session from the sidebar to inspect</p>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+export default App;
