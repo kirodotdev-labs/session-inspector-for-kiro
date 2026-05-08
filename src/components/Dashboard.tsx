@@ -30,7 +30,18 @@ export function Dashboard() {
   if (loading) return <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">Loading dashboard...</div>;
   if (!data) return <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">Failed to load dashboard</div>;
 
-  const last30 = data.daily.slice(-30);
+  const last30 = (() => {
+    const days: typeof data.daily = [];
+    const today = new Date();
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const existing = data.daily.find((x) => x.date === key);
+      days.push(existing || { date: key, sessions: 0, cost: 0, executions: 0, actions: {} });
+    }
+    return days;
+  })();
   const maxCost = Math.max(...last30.map((d) => d.cost), 0.01);
 
   // Weekly aggregation
