@@ -26,7 +26,8 @@ export interface SessionDetail {
   contextUsage: number;
   workspacePath: string;
   messageCount: number;
-  history: { role: string; content: string; executionId?: string; actions?: Action[] }[];
+  totalCost: number;
+  history: { role: string; content: string; executionId?: string; actions?: Action[]; cost?: number }[];
 }
 
 const API = "http://localhost:3001/api";

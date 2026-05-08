@@ -114,6 +114,12 @@ function extractActions(executionData: any): any[] {
     }));
 }
 
+function extractCost(executionData: any): number {
+  const summary = executionData?.usageSummary;
+  if (!Array.isArray(summary)) return 0;
+  return summary.reduce((sum: number, s: any) => sum + (s.usage || 0), 0);
+}
+
 app.get("/api/workspaces", (_req, res) => {
   const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
   const workspaces = dirs
@@ -170,10 +176,12 @@ app.get("/api/workspaces/:workspaceId/sessions/:sessionId", (req, res) => {
 
       const executionId = h.executionId || null;
       let actions: any[] = [];
+      let cost = 0;
       if (executionId) {
         const execData = execMap.get(executionId);
         if (execData) {
           actions = extractActions(execData);
+          cost = extractCost(execData);
         }
       }
 
@@ -182,6 +190,7 @@ app.get("/api/workspaces/:workspaceId/sessions/:sessionId", (req, res) => {
         content,
         executionId,
         actions,
+        cost,
       };
     });
 
@@ -194,6 +203,7 @@ app.get("/api/workspaces/:workspaceId/sessions/:sessionId", (req, res) => {
       contextUsage: data.contextUsagePercentage,
       workspacePath,
       messageCount: history.length,
+      totalCost: history.reduce((sum: number, h: any) => sum + (h.cost || 0), 0),
       history,
     });
   } catch (e: any) {

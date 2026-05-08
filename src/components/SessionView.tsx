@@ -1,4 +1,4 @@
-import { Bot, User, Gauge, Zap, Layers, Terminal, FileText, Search, PenLine, Brain, MessageSquare, ChevronDown, ChevronRight } from "lucide-react";
+import { Bot, User, Gauge, Zap, Layers, Terminal, FileText, Search, PenLine, Brain, MessageSquare, ChevronDown, ChevronRight, Coins } from "lucide-react";
 import { clsx } from "clsx";
 import { useState } from "react";
 import type { SessionDetail, Action } from "../App";
@@ -104,6 +104,11 @@ export function SessionView({ session }: Props) {
           <span className="px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
             {session.messageCount} messages
           </span>
+          {session.totalCost > 0 && (
+            <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+              <Coins size={12} /> {session.totalCost.toFixed(2)} credits
+            </span>
+          )}
         </div>
       </div>
 
@@ -125,6 +130,11 @@ export function SessionView({ session }: Props) {
                 <Bot size={12} className="text-[var(--accent)]" />
               )}
               {msg.role}
+              {msg.cost ? (
+                <span className="ml-auto font-normal normal-case tracking-normal text-[var(--text-secondary)]">
+                  {msg.cost.toFixed(2)} credits
+                </span>
+              ) : null}
             </div>
 
             {msg.content && (
