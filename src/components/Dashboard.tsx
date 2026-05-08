@@ -121,7 +121,7 @@ export function Dashboard() {
         <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">Session Type</h3>
           <div className="space-y-2">
-            {Object.entries(data.sessionTypes).sort((a, b) => b[1] - a[1]).map(([type, count]) => {
+            {Object.entries(data.sessionTypes || {}).sort((a, b) => b[1] - a[1]).map(([type, count]) => {
               const pct = (count / data.totalSessions) * 100;
               return (
                 <div key={type} className="space-y-1">
@@ -141,7 +141,7 @@ export function Dashboard() {
         <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">Autonomy Mode</h3>
           <div className="space-y-2">
-            {Object.entries(data.autonomyModes).sort((a, b) => b[1] - a[1]).map(([mode, count]) => {
+            {Object.entries(data.autonomyModes || {}).sort((a, b) => b[1] - a[1]).map(([mode, count]) => {
               const pct = (count / data.totalSessions) * 100;
               return (
                 <div key={mode} className="space-y-1">
@@ -161,7 +161,7 @@ export function Dashboard() {
         <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">Model Usage</h3>
           <div className="space-y-2">
-            {Object.entries(data.modelSessions).sort((a, b) => b[1] - a[1]).map(([model, count]) => {
+            {Object.entries(data.modelSessions || {}).sort((a, b) => b[1] - a[1]).map(([model, count]) => {
               const pct = (count / data.totalSessions) * 100;
               return (
                 <div key={model} className="space-y-1">
