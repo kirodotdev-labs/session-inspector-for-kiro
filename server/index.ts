@@ -211,5 +211,105 @@ app.get("/api/workspaces/:workspaceId/sessions/:sessionId", (req, res) => {
   }
 });
 
+// Dashboard: aggregate stats across all workspaces and executions
+app.get("/api/dashboard", (_req, res) => {
+  const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true }).filter((d) => d.isDirectory());
+
+  const dailyStats: Record<string, { sessions: number; cost: number; executions: number; actions: Record<string, number> }> = {};
+  const modelUsage: Record<string, number> = {};
+  const workspaceStats: Record<string, { name: string; cost: number; sessions: number; executions: number }> = {};
+  let totalCost = 0;
+  let totalExecutions = 0;
+  let totalSessions = 0;
+
+  for (const d of dirs) {
+    const sessionsFile = path.join(SESSIONS_DIR, d.name, "sessions.json");
+    let sessions: any[] = [];
+    try { sessions = JSON.parse(fs.readFileSync(sessionsFile, "utf-8")); } catch { continue; }
+    if (!Array.isArray(sessions) || sessions.length === 0) continue;
+
+    const decodedPath = decodeBase64Url(d.name);
+    const projectName = decodedPath.split("/").filter(Boolean).pop() || d.name;
+    const wsHash = crypto.createHash("sha256").update(decodedPath).digest("hex").slice(0, 32);
+    const wsExecDir = path.join(GLOBAL_STORAGE, wsHash);
+
+    totalSessions += sessions.length;
+
+    // Track sessions by date
+    for (const s of sessions) {
+      const date = new Date(Number(s.dateCreated)).toISOString().slice(0, 10);
+      if (!dailyStats[date]) dailyStats[date] = { sessions: 0, cost: 0, executions: 0, actions: {} };
+      dailyStats[date].sessions++;
+    }
+
+    // Load executions for this workspace
+    if (!fs.existsSync(wsExecDir)) continue;
+    let wsCost = 0;
+    let wsExecs = 0;
+
+    try {
+      const entries = fs.readdirSync(wsExecDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const subDir = path.join(wsExecDir, entry.name);
+        let files: string[];
+        try { files = fs.readdirSync(subDir); } catch { continue; }
+        for (const file of files) {
+          const filePath = path.join(subDir, file);
+          try {
+            const stat = fs.statSync(filePath);
+            if (!stat.isFile() || stat.size < 100) continue;
+            const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+            if (!data.executionId || !data.actions) continue;
+
+            wsExecs++;
+            totalExecutions++;
+            const cost = extractCost(data);
+            wsCost += cost;
+            totalCost += cost;
+
+            const date = new Date(data.startTime).toISOString().slice(0, 10);
+            if (!dailyStats[date]) dailyStats[date] = { sessions: 0, cost: 0, executions: 0, actions: {} };
+            dailyStats[date].cost += cost;
+            dailyStats[date].executions++;
+
+            // Count action types
+            for (const a of data.actions) {
+              const t = a.actionType;
+              if (t && t !== "intentClassification" && t !== "model") {
+                dailyStats[date].actions[t] = (dailyStats[date].actions[t] || 0) + 1;
+              }
+            }
+
+            // Model usage from metadata or input
+            const model = data.input?.model || "unknown";
+            modelUsage[model] = (modelUsage[model] || 0) + cost;
+          } catch {}
+        }
+      }
+    } catch {}
+
+    if (wsExecs > 0 || sessions.length > 0) {
+      workspaceStats[projectName] = { name: projectName, cost: wsCost, sessions: sessions.length, executions: wsExecs };
+    }
+  }
+
+  // Convert dailyStats to sorted array
+  const daily = Object.entries(dailyStats)
+    .map(([date, stats]) => ({ date, ...stats }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const workspaces = Object.values(workspaceStats).sort((a, b) => b.cost - a.cost);
+
+  res.json({
+    totalCost,
+    totalSessions,
+    totalExecutions,
+    daily,
+    modelUsage,
+    workspaces,
+  });
+});
+
 const PORT = 3001;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

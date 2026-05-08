@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, FolderOpen, MessageSquare } from "lucide-react";
+import { ChevronRight, FolderOpen, MessageSquare, LayoutDashboard, List } from "lucide-react";
 import { clsx } from "clsx";
 import type { Workspace } from "../App";
 
@@ -7,9 +7,11 @@ interface Props {
   workspaces: Workspace[];
   selectedSession: { workspaceId: string; sessionId: string } | null;
   onSelect: (workspaceId: string, sessionId: string) => void;
+  view: "dashboard" | "sessions";
+  onViewChange: (view: "dashboard" | "sessions") => void;
 }
 
-export function Sidebar({ workspaces, selectedSession, onSelect }: Props) {
+export function Sidebar({ workspaces, selectedSession, onSelect, view, onViewChange }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const toggle = (id: string) => {
@@ -30,6 +32,20 @@ export function Sidebar({ workspaces, selectedSession, onSelect }: Props) {
           {workspaces.length} workspaces •{" "}
           {workspaces.reduce((a, w) => a + w.sessionCount, 0)} sessions
         </p>
+      </div>
+      <div className="flex border-b border-[var(--border)]">
+        <button
+          onClick={() => onViewChange("dashboard")}
+          className={clsx("flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors", view === "dashboard" ? "text-[var(--accent)] border-b-2 border-[var(--accent)]" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]")}
+        >
+          <LayoutDashboard size={12} /> Dashboard
+        </button>
+        <button
+          onClick={() => onViewChange("sessions")}
+          className={clsx("flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors", view === "sessions" ? "text-[var(--accent)] border-b-2 border-[var(--accent)]" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]")}
+        >
+          <List size={12} /> Sessions
+        </button>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
         {workspaces.map((ws) => (

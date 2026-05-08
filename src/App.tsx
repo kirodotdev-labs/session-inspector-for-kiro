@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
+import { Dashboard } from "./components/Dashboard";
 
 export interface Workspace {
   id: string;
@@ -40,6 +41,7 @@ function App() {
   } | null>(null);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [view, setView] = useState<"dashboard" | "sessions">("dashboard");
 
   useEffect(() => {
     fetch(`${API}/workspaces`)
@@ -65,12 +67,17 @@ function App() {
       <Sidebar
         workspaces={workspaces}
         selectedSession={selectedSession}
-        onSelect={(workspaceId, sessionId) =>
-          setSelectedSession({ workspaceId, sessionId })
-        }
+        onSelect={(workspaceId, sessionId) => {
+          setSelectedSession({ workspaceId, sessionId });
+          setView("sessions");
+        }}
+        view={view}
+        onViewChange={setView}
       />
       <main className="flex-1 overflow-y-auto">
-        {loading ? (
+        {view === "dashboard" ? (
+          <Dashboard />
+        ) : loading ? (
           <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
             Loading session...
           </div>
