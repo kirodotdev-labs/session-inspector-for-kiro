@@ -1,73 +1,109 @@
-# React + TypeScript + Vite
+# Kiro Sessions Inspector
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Inspect the sessions and tool executions recorded by the Kiro IDE directly
+from your local Application Support folder. Two front-ends are shipped in
+this repo:
 
-Currently, two official plugins are available:
+- **Web** — React + Vite app with a small Express backend that reads the
+  session JSON files. Runs in a browser.
+- **macOS native** — SwiftUI port of the same UI, packaged as a `.app`
+  bundle with its own Dock icon. No server required.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Both read the same on-disk format documented in
+[`KIRO_SESSION_FORMAT.md`](KIRO_SESSION_FORMAT.md).
 
-## React Compiler
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Web version (React + Express)
 
-## Expanding the ESLint configuration
+### Requirements
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- Node 20+
+- [pnpm](https://pnpm.io/) (installed via `corepack enable` or `brew install pnpm`)
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### Install and run
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+pnpm install
+pnpm start
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+`pnpm start` uses [`concurrently`](https://www.npmjs.com/package/concurrently)
+to launch two processes:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+| Script        | What it does                                              | Port |
+| ------------- | --------------------------------------------------------- | ---- |
+| `pnpm dev`    | Vite dev server for the React UI with HMR                 | 5173 |
+| `pnpm server` | Express API (`server/index.ts`) that streams session JSON | 3000 |
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Open <http://localhost:5173> once both are running.
+
+### Layout
+
 ```
+src/
+  App.tsx               # top-level routing
+  main.tsx              # React entry
+  components/
+    Dashboard.tsx       # aggregate stats, charts, breakdowns
+    SessionView.tsx     # message thread with expandable tool calls
+    Sidebar.tsx         # workspace + session list
+server/
+  index.ts              # Express API reading ~/Library/Application Support/Kiro
+```
+
+### Data sources
+
+The Express backend reads directly from:
+
+```
+~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/
+  workspace-sessions/           # per-workspace session metadata (sessions.json, <sessionId>.json)
+  <sha256[:32](workspace)>/...  # per-execution JSON files with tool calls and usage
+```
+
+No credentials are sent off-machine; everything stays on local disk.
+
+### Build a production bundle
+
+```bash
+pnpm build        # emits ./dist
+pnpm preview      # serves ./dist on http://localhost:4173
+```
+
+In production you still need `pnpm server` running (or the Express code
+ported behind whatever reverse proxy you prefer) so the UI can fetch
+session data.
+
+### Linting
+
+```bash
+pnpm lint
+```
+
+ESLint is configured in `eslint.config.js` with TypeScript + React hooks
+rules. Prettier is not currently wired up.
+
+---
+
+## macOS native version (SwiftUI)
+
+A fully offline port with no Express backend — the Swift app reads the
+same JSON files and hashed workspace directories directly.
+
+See [`macos-swift/README.md`](macos-swift/README.md) for the quick start,
+[`macos-swift/HOMEBREW.md`](macos-swift/HOMEBREW.md) for Homebrew install,
+and [`macos-swift/DISTRIBUTION.md`](macos-swift/DISTRIBUTION.md) for
+building a shareable `.dmg` or `.zip`.
+
+```bash
+cd macos-swift
+swift run                 # dev run
+make dmg                  # release .dmg in .build/dist/
+```
+
+---
+
+## License
+
+[MIT-0](LICENSE) (MIT No Attribution) — use it however you like.
