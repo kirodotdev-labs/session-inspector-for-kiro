@@ -78,18 +78,21 @@ export function Dashboard() {
       {/* Daily activity chart (last 30 days) */}
       <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
         <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">Daily Activity (Last 30 Days)</h3>
-        <div className="flex items-end gap-px h-32">
-          {last30.map((d) => (
+        <div className="flex items-end gap-px" style={{ height: "128px" }}>
+          {last30.map((d) => {
+            const h = d.cost > 0 ? Math.max(4, Math.round((d.cost / maxCost) * 120)) : 0;
+            return (
             <div key={d.date} className="flex-1 flex flex-col items-center gap-px group relative">
               <div className="absolute bottom-full mb-1 hidden group-hover:block bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-2 py-1 text-xs whitespace-nowrap z-10">
                 {d.date}: {d.cost.toFixed(2)} credits, {d.executions} execs
               </div>
               <div
                 className="w-full bg-[var(--accent)] rounded-t opacity-70 hover:opacity-100 transition-opacity"
-                style={{ height: `${(d.cost / maxCost) * 100}%`, minHeight: d.cost > 0 ? "2px" : "0" }}
+                style={{ height: `${h}px` }}
               />
             </div>
-          ))}
+            );
+          })}
         </div>
         <div className="flex justify-between text-xs text-[var(--text-secondary)] mt-1">
           <span>{last30[0]?.date}</span>
