@@ -1,4 +1,21 @@
-import { Bot, User, Gauge, Zap, Layers, Terminal, FileText, Search, PenLine, Brain, MessageSquare, ChevronDown, ChevronRight, Coins } from "lucide-react";
+import {
+  Bot,
+  User,
+  Gauge,
+  Zap,
+  Layers,
+  Terminal,
+  FileText,
+  Search,
+  PenLine,
+  Brain,
+  MessageSquare,
+  ChevronDown,
+  ChevronRight,
+  Coins,
+  MonitorDot,
+  BookOpen,
+} from "lucide-react";
 import { clsx } from "clsx";
 import { useState } from "react";
 import type { SessionDetail, Action } from "../App";
@@ -9,35 +26,115 @@ interface Props {
 
 function ActionIcon({ type }: { type: string }) {
   switch (type) {
-    case "reasoning": return <Brain size={12} className="text-purple-400" />;
-    case "say": return <MessageSquare size={12} className="text-blue-400" />;
-    case "runCommand": return <Terminal size={12} className="text-green-400" />;
-    case "readFiles": return <FileText size={12} className="text-yellow-400" />;
-    case "search": return <Search size={12} className="text-cyan-400" />;
-    case "replace": case "write": case "create": return <PenLine size={12} className="text-orange-400" />;
-    default: return <Zap size={12} className="text-[var(--text-secondary)]" />;
+    case "reasoning":
+      return <Brain size={12} className="text-purple-400" />;
+    case "say":
+      return <MessageSquare size={12} className="text-blue-400" />;
+    case "runCommand":
+      return <Terminal size={12} className="text-green-400" />;
+    case "readFiles":
+      return <FileText size={12} className="text-yellow-400" />;
+    case "search":
+      return <Search size={12} className="text-cyan-400" />;
+    case "replace":
+    case "write":
+    case "create":
+      return <PenLine size={12} className="text-orange-400" />;
+    case "knowledge":
+      return <BookOpen size={12} className="text-pink-400" />;
+    default:
+      return <Zap size={12} className="text-[var(--text-secondary)]" />;
   }
 }
 
-function ActionLabel({ action }: { action: Action }) {
+function describeAction(action: Action): string {
   const { actionType, input } = action;
+  const i = input ?? {};
   switch (actionType) {
-    case "runCommand": return <>{input?.command || "command"}</>;
-    case "readFiles": return <>{input?.files?.map((f: any) => f.path).join(", ") || "read"}</>;
-    case "search": return <>{input?.query || "search"}</>;
-    case "replace": case "write": case "create": return <>{input?.file || actionType}</>;
-    case "getDiagnostics": return <>{input?.paths?.join(", ") || "diagnostics"}</>;
-    default: return <>{actionType}</>;
+    case "runCommand":
+      return i.command || i.cmd || "command";
+    case "readFiles": {
+      // IDE: files[].path ; CLI read tool: operations[].path
+      if (Array.isArray(i.files))
+        return i.files.map((f: any) => f.path).join(", ");
+      if (Array.isArray(i.operations))
+        return (
+          i.operations
+            .map((o: any) => o.path || o.target || "")
+            .filter(Boolean)
+            .join(", ") || "read"
+        );
+      if (i.path) return i.path;
+      return "read";
+    }
+    case "search":
+      return i.query || i.searchQuery || "search";
+    case "replace":
+    case "write":
+    case "create":
+      return i.file || i.path || actionType;
+    case "getDiagnostics":
+      return Array.isArray(i.paths) ? i.paths.join(", ") : "diagnostics";
+    case "knowledge":
+      return i.command || i.query || "knowledge";
+    default:
+      return actionType;
   }
+}
+
+function renderOutput(action: Action): React.ReactNode {
+  const { output } = action;
+  if (output == null) return null;
+  // CLI shell output is usually an object with exit_status/stdout/stderr
+  if (
+    typeof output === "object" &&
+    !Array.isArray(output) &&
+    (output.stdout !== undefined || output.stderr !== undefined)
+  ) {
+    return (
+      <div className="space-y-1">
+        {output.exit_status && (
+          <div className="text-[10px] text-[var(--text-secondary)]">
+            {output.exit_status}
+          </div>
+        )}
+        {output.stdout && (
+          <pre className="text-[var(--text-primary)] whitespace-pre-wrap break-words">
+            {String(output.stdout)}
+          </pre>
+        )}
+        {output.stderr && (
+          <pre className="text-[var(--text-secondary)] whitespace-pre-wrap break-words border-t border-[var(--border)] pt-1">
+            {String(output.stderr)}
+          </pre>
+        )}
+      </div>
+    );
+  }
+  if (typeof output === "string") {
+    return (
+      <pre className="text-[var(--text-primary)] whitespace-pre-wrap break-words">
+        {output}
+      </pre>
+    );
+  }
+  return (
+    <pre className="text-[var(--text-primary)]">
+      {JSON.stringify(output, null, 2)}
+    </pre>
+  );
 }
 
 function ActionBlock({ action }: { action: Action }) {
   const [expanded, setExpanded] = useState(false);
   const isThinking = action.actionType === "reasoning";
   const isSay = action.actionType === "say";
-  const message = action.output?.message || "";
+  const message =
+    typeof action.output === "object" && action.output !== null
+      ? action.output.message
+      : undefined;
 
-  if (isSay) {
+  if (isSay && message) {
     return (
       <div className="text-sm text-[var(--text-primary)] whitespace-pre-wrap">
         {message}
@@ -48,12 +145,17 @@ function ActionBlock({ action }: { action: Action }) {
   if (isThinking) {
     return (
       <div className="border-l-2 border-purple-500/40 pl-3 my-1">
-        <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300"
+        >
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <Brain size={12} /> Thinking
         </button>
         {expanded && (
-          <div className="mt-1 text-xs text-[var(--text-secondary)] whitespace-pre-wrap">{message}</div>
+          <div className="mt-1 text-xs text-[var(--text-secondary)] whitespace-pre-wrap">
+            {message}
+          </div>
         )}
       </div>
     );
@@ -61,21 +163,42 @@ function ActionBlock({ action }: { action: Action }) {
 
   return (
     <div className="my-1">
-      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-mono">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-mono"
+      >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <ActionIcon type={action.actionType} />
-        <span className="truncate max-w-md"><ActionLabel action={action} /></span>
+        <span className="truncate max-w-md">{describeAction(action)}</span>
+        {action.rawToolName && action.rawToolName !== action.actionType && (
+          <span className="text-[10px] text-[var(--text-secondary)] opacity-70">
+            [{action.rawToolName}]
+          </span>
+        )}
         {action.actionState && action.actionState !== "Success" && (
-          <span className="text-yellow-500 ml-1">({action.actionState})</span>
+          <span
+            className={clsx(
+              "ml-1",
+              action.actionState === "Error"
+                ? "text-red-400"
+                : "text-yellow-500",
+            )}
+          >
+            ({action.actionState})
+          </span>
         )}
       </button>
       {expanded && (
         <div className="mt-1 ml-5 text-xs bg-[var(--bg-tertiary)] rounded p-2 overflow-x-auto">
-          {action.input && <pre className="text-[var(--text-secondary)]">{JSON.stringify(action.input, null, 2)}</pre>}
-          {action.output && (
-            <pre className="mt-1 text-[var(--text-primary)] border-t border-[var(--border)] pt-1">
-              {typeof action.output === "object" ? JSON.stringify(action.output, null, 2) : String(action.output)}
+          {action.input && (
+            <pre className="text-[var(--text-secondary)]">
+              {JSON.stringify(action.input, null, 2)}
             </pre>
+          )}
+          {action.output && (
+            <div className="mt-1 border-t border-[var(--border)] pt-1">
+              {renderOutput(action)}
+            </div>
           )}
         </div>
       )}
@@ -84,16 +207,36 @@ function ActionBlock({ action }: { action: Action }) {
 }
 
 export function SessionView({ session }: Props) {
+  const isCli = session.source === "cli";
   return (
     <div className="max-w-4xl mx-auto p-6">
       <div className="mb-6">
-        <h2 className="text-lg font-medium mb-2">{session.title || "Untitled"}</h2>
+        <div className="flex items-center gap-2 mb-2">
+          <span
+            className={clsx(
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide",
+              isCli
+                ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                : "bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30",
+            )}
+          >
+            {isCli ? <Terminal size={10} /> : <MonitorDot size={10} />}{" "}
+            {isCli ? "Kiro CLI" : "Kiro IDE"}
+          </span>
+          <h2 className="text-lg font-medium truncate">
+            {session.title || "Untitled"}
+          </h2>
+        </div>
+        <div className="text-xs text-[var(--text-secondary)] mb-2 font-mono truncate">
+          {session.workspacePath}
+        </div>
         <div className="flex flex-wrap gap-3 text-xs text-[var(--text-secondary)]">
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
             <Bot size={12} /> {session.model}
           </span>
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
-            <Zap size={12} /> {session.autonomyMode}
+            <Zap size={12} />{" "}
+            {isCli ? `agent:${session.autonomyMode}` : session.autonomyMode}
           </span>
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
             <Layers size={12} /> {session.sessionType}
@@ -117,17 +260,24 @@ export function SessionView({ session }: Props) {
           <div
             key={i}
             className={clsx(
-              "rounded-lg p-4 text-sm leading-relaxed",
+              "rounded-lg p-4 text-sm leading-relaxed border",
               msg.role === "user"
-                ? "bg-[var(--bg-tertiary)] border border-[var(--border)]"
-                : "bg-[var(--bg-secondary)] border border-[var(--border)]"
+                ? "bg-[var(--bg-tertiary)] border-[var(--border)]"
+                : isCli
+                  ? "bg-emerald-500/5 border-emerald-500/20"
+                  : "bg-[var(--bg-secondary)] border-[var(--border)]",
             )}
           >
             <div className="flex items-center gap-2 mb-2 text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
               {msg.role === "user" ? (
                 <User size={12} className="text-blue-400" />
               ) : (
-                <Bot size={12} className="text-[var(--accent)]" />
+                <Bot
+                  size={12}
+                  className={
+                    isCli ? "text-emerald-400" : "text-[var(--accent)]"
+                  }
+                />
               )}
               {msg.role}
               {msg.cost ? (
@@ -152,7 +302,9 @@ export function SessionView({ session }: Props) {
             )}
 
             {!msg.content && (!msg.actions || msg.actions.length === 0) && (
-              <span className="italic text-[var(--text-secondary)]">(empty)</span>
+              <span className="italic text-[var(--text-secondary)]">
+                (empty)
+              </span>
             )}
           </div>
         ))}

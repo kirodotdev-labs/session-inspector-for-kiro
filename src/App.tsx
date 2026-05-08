@@ -3,22 +3,27 @@ import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
 
+export type Source = "ide" | "cli";
+
 export interface Workspace {
   id: string;
+  source: Source;
   path: string;
   name: string;
   sessionCount: number;
-  sessions: { id: string; title: string; date: number }[];
+  sessions: { id: string; title: string; date: number; source: Source }[];
 }
 
 export interface Action {
   actionType: string;
+  rawToolName?: string;
   actionState?: string;
   input?: Record<string, any>;
-  output?: Record<string, any>;
+  output?: any;
 }
 
 export interface SessionDetail {
+  source: Source;
   sessionId: string;
   title: string;
   model: string;
@@ -28,7 +33,13 @@ export interface SessionDetail {
   workspacePath: string;
   messageCount: number;
   totalCost: number;
-  history: { role: string; content: string; executionId?: string; actions?: Action[]; cost?: number }[];
+  history: {
+    role: string;
+    content: string;
+    executionId?: string;
+    actions?: Action[];
+    cost?: number;
+  }[];
 }
 
 const API = "http://localhost:3001/api";
@@ -53,7 +64,7 @@ function App() {
     if (!selectedSession) return;
     setLoading(true);
     fetch(
-      `${API}/workspaces/${selectedSession.workspaceId}/sessions/${selectedSession.sessionId}`
+      `${API}/workspaces/${encodeURIComponent(selectedSession.workspaceId)}/sessions/${selectedSession.sessionId}`,
     )
       .then((r) => r.json())
       .then((d) => {
@@ -86,8 +97,12 @@ function App() {
         ) : (
           <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
             <div className="text-center">
-              <p className="text-2xl font-light mb-2">Kiro Sessions Inspector</p>
-              <p className="text-sm">Select a session from the sidebar to inspect</p>
+              <p className="text-2xl font-light mb-2">
+                Kiro Sessions Inspector
+              </p>
+              <p className="text-sm">
+                Select a session from the sidebar to inspect
+              </p>
             </div>
           </div>
         )}

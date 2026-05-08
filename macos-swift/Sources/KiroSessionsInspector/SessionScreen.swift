@@ -8,7 +8,7 @@ struct SessionScreen: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 ForEach(session.history) { msg in
-                    MessageBlock(message: msg)
+                    MessageBlock(message: msg, source: session.source)
                 }
             }
             .padding(24)
@@ -17,16 +17,49 @@ struct SessionScreen: View {
         }
     }
 
+    private var isCli: Bool { session.source == .cli }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(session.title.isEmpty ? "Untitled" : session.title)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(Theme.textPrimary)
+            HStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    Image(systemName: isCli ? "terminal" : "display")
+                        .font(.system(size: 9))
+                    Text(isCli ? "KIRO CLI" : "KIRO IDE")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.8)
+                }
+                .foregroundStyle(Theme.color(for: session.source))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Theme.color(for: session.source).opacity(0.15))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Theme.color(for: session.source).opacity(0.3), lineWidth: 1)
+                )
+
+                Text(session.title.isEmpty ? "Untitled" : session.title)
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            if !session.workspacePath.isEmpty {
+                Text(session.workspacePath)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
 
             // Chips wrap to a second row as needed.
             FlowLayout(spacing: 8) {
                 chip(icon: "cpu", text: session.model)
-                chip(icon: "bolt", text: session.autonomyMode)
+                chip(icon: "bolt", text: isCli ? "agent:\(session.autonomyMode)" : session.autonomyMode)
                 chip(icon: "square.stack.3d.up", text: session.sessionType)
                 chip(icon: "gauge.with.dots.needle.bottom.50percent",
                      text: String(format: "%.1f%% context", session.contextUsage))
@@ -55,13 +88,18 @@ struct SessionScreen: View {
 
 private struct MessageBlock: View {
     let message: HistoryMessage
+    let source: SessionSource
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: message.role == "user" ? "person.fill" : "sparkles")
                     .font(.system(size: 11))
-                    .foregroundStyle(message.role == "user" ? Theme.blue : Theme.accent)
+                    .foregroundStyle(
+                        message.role == "user"
+                            ? Theme.blue
+                            : Theme.color(for: source)
+                    )
                 Text(message.role.uppercased())
                     .font(.system(size: 10, weight: .medium))
                     .tracking(0.8)
@@ -100,12 +138,26 @@ private struct MessageBlock: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(message.role == "user" ? Theme.bgTertiary : Theme.bgSecondary)
+        .background(background)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Theme.border, lineWidth: 1)
+                .stroke(borderColor, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var background: Color {
+        if message.role == "user" { return Theme.bgTertiary }
+        return source == .cli
+            ? Theme.cliAccent.opacity(0.06)
+            : Theme.bgSecondary
+    }
+
+    private var borderColor: Color {
+        if source == .cli && message.role != "user" {
+            return Theme.cliAccent.opacity(0.22)
+        }
+        return Theme.border
     }
 }
 
@@ -184,10 +236,15 @@ private struct ActionBlock: View {
                         .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                    if let raw = action.rawToolName, raw != action.actionType {
+                        Text("[\(raw)]")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.textSecondary.opacity(0.7))
+                    }
                     if let state = action.actionState, state != "Success" {
                         Text("(\(state))")
                             .font(.system(size: 11))
-                            .foregroundStyle(Theme.yellow)
+                            .foregroundStyle(state == "Error" ? Theme.red : Theme.yellow)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -207,11 +264,7 @@ private struct ActionBlock: View {
                         if action.input != nil {
                             Rectangle().fill(Theme.border).frame(height: 1).padding(.vertical, 2)
                         }
-                        Text(output.prettyString())
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(Theme.textPrimary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        outputView(for: output)
                     }
                 }
                 .padding(8)
@@ -224,6 +277,50 @@ private struct ActionBlock: View {
         .padding(.vertical, 1)
     }
 
+    @ViewBuilder
+    private func outputView(for output: JSONValue) -> some View {
+        // Shell-style tool result: { exit_status, stdout, stderr }
+        if case .object(let obj) = output,
+           obj["stdout"] != nil || obj["stderr"] != nil || obj["exit_status"] != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                if let exit = obj["exit_status"]?.stringValue {
+                    Text(exit)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                if let stdout = obj["stdout"]?.stringValue, !stdout.isEmpty {
+                    Text(stdout)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Theme.textPrimary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let stderr = obj["stderr"]?.stringValue, !stderr.isEmpty {
+                    if obj["stdout"]?.stringValue?.isEmpty == false {
+                        Rectangle().fill(Theme.border).frame(height: 1)
+                    }
+                    Text(stderr)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        } else if case .string(let s) = output {
+            Text(s)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(Theme.textPrimary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(output.prettyString())
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(Theme.textPrimary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     private func icon(for type: String) -> String {
         switch type {
         case "runCommand": return "terminal"
@@ -231,6 +328,7 @@ private struct ActionBlock: View {
         case "search": return "magnifyingglass"
         case "replace", "write", "create": return "square.and.pencil"
         case "getDiagnostics": return "exclamationmark.triangle"
+        case "knowledge": return "book"
         default: return "bolt"
         }
     }
@@ -241,6 +339,7 @@ private struct ActionBlock: View {
         case "readFiles": return Theme.yellow
         case "search": return Theme.cyan
         case "replace", "write", "create": return Theme.orange
+        case "knowledge": return Theme.pink
         default: return Theme.textSecondary
         }
     }
@@ -249,22 +348,39 @@ private struct ActionBlock: View {
         let input = action.input
         switch action.actionType {
         case "runCommand":
-            return input?["command"]?.stringValue ?? "command"
+            return input?["command"]?.stringValue
+                ?? input?["cmd"]?.stringValue
+                ?? "command"
         case "readFiles":
             if let files = input?["files"]?.arrayValue {
                 let paths = files.compactMap { $0["path"]?.stringValue }
-                return paths.isEmpty ? "read" : paths.joined(separator: ", ")
+                if !paths.isEmpty { return paths.joined(separator: ", ") }
             }
+            if let ops = input?["operations"]?.arrayValue {
+                let paths = ops.compactMap {
+                    $0["path"]?.stringValue ?? $0["target"]?.stringValue
+                }
+                if !paths.isEmpty { return paths.joined(separator: ", ") }
+            }
+            if let p = input?["path"]?.stringValue { return p }
             return "read"
         case "search":
-            return input?["query"]?.stringValue ?? "search"
+            return input?["query"]?.stringValue
+                ?? input?["searchQuery"]?.stringValue
+                ?? "search"
         case "replace", "write", "create":
-            return input?["file"]?.stringValue ?? action.actionType
+            return input?["file"]?.stringValue
+                ?? input?["path"]?.stringValue
+                ?? action.actionType
         case "getDiagnostics":
             if let paths = input?["paths"]?.arrayValue {
                 return paths.compactMap { $0.stringValue }.joined(separator: ", ")
             }
             return "diagnostics"
+        case "knowledge":
+            return input?["command"]?.stringValue
+                ?? input?["query"]?.stringValue
+                ?? "knowledge"
         default:
             return action.actionType
         }

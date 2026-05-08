@@ -1,5 +1,17 @@
 import SwiftUI
 
+enum SidebarSourceFilter: String, CaseIterable, Identifiable {
+    case all, ide, cli
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .ide: return "IDE"
+        case .cli: return "CLI"
+        }
+    }
+}
+
 struct SidebarView_: View {
     @EnvironmentObject private var store: SessionsStore
     @Binding var view: SidebarView
@@ -7,19 +19,19 @@ struct SidebarView_: View {
     let onSelect: (_ workspaceId: String, _ sessionId: String) -> Void
 
     @State private var expanded: Set<String> = []
+    @State private var sourceFilter: SidebarSourceFilter = .all
 
     var body: some View {
         VStack(spacing: 0) {
             header
             tabs
+            filterBar
             list
         }
         .frame(maxHeight: .infinity)
         .background(Theme.bgSecondary)
         .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(Theme.border)
-                .frame(width: 1)
+            Rectangle().fill(Theme.border).frame(width: 1)
         }
     }
 
@@ -34,6 +46,11 @@ struct SidebarView_: View {
             Text("\(store.workspaces.count) workspaces • \(totalSessions) sessions")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textSecondary)
+            HStack(spacing: 10) {
+                sourceCounter(source: .ide, sessions: counts(for: .ide).sessions)
+                sourceCounter(source: .cli, sessions: counts(for: .cli).sessions)
+            }
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
@@ -42,8 +59,24 @@ struct SidebarView_: View {
         }
     }
 
+    private func sourceCounter(source: SessionSource, sessions: Int) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: source == .cli ? "terminal" : "display")
+                .font(.system(size: 9))
+                .foregroundStyle(Theme.color(for: source))
+            Text("\(source.label) \(sessions)")
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.textSecondary)
+        }
+    }
+
     private var totalSessions: Int {
         store.workspaces.reduce(0) { $0 + $1.sessionCount }
+    }
+
+    private func counts(for source: SessionSource) -> (workspaces: Int, sessions: Int) {
+        let list = store.workspaces.filter { $0.source == source }
+        return (list.count, list.reduce(0) { $0 + $1.sessionCount })
     }
 
     // MARK: - Tabs
@@ -80,20 +113,93 @@ struct SidebarView_: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - Source filter
+
+    private var filterBar: some View {
+        HStack(spacing: 4) {
+            ForEach(SidebarSourceFilter.allCases) { f in
+                let active = sourceFilter == f
+                Button {
+                    sourceFilter = f
+                } label: {
+                    HStack(spacing: 4) {
+                        if f == .ide { Image(systemName: "display").font(.system(size: 9)) }
+                        if f == .cli { Image(systemName: "terminal").font(.system(size: 9)) }
+                        Text(f.title).font(.system(size: 11))
+                    }
+                    .foregroundStyle(active ? Theme.textPrimary : Theme.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(active ? Theme.bgTertiary : Color.clear)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(8)
+        .background(Theme.bgPrimary.opacity(0.2))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.border).frame(height: 1)
+        }
+    }
+
     // MARK: - Workspaces list
+
+    private var visibleWorkspaces: [Workspace] {
+        switch sourceFilter {
+        case .all: return store.workspaces
+        case .ide: return store.workspaces.filter { $0.source == .ide }
+        case .cli: return store.workspaces.filter { $0.source == .cli }
+        }
+    }
 
     private var list: some View {
         ScrollView {
-            LazyVStack(spacing: 2) {
-                ForEach(store.workspaces) { ws in
-                    workspaceRow(ws)
-                    if expanded.contains(ws.id) {
-                        sessionsList(for: ws)
+            LazyVStack(spacing: 4) {
+                ForEach(SessionSource.allCases, id: \.self) { source in
+                    let list = visibleWorkspaces.filter { $0.source == source }
+                    if !list.isEmpty {
+                        sectionHeader(for: source, count: list.count)
+                        ForEach(list) { ws in
+                            workspaceRow(ws)
+                            if expanded.contains(ws.id) {
+                                sessionsList(for: ws)
+                            }
+                        }
                     }
+                }
+
+                if visibleWorkspaces.isEmpty {
+                    Text("No workspaces for this filter.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 24)
                 }
             }
             .padding(8)
         }
+    }
+
+    private func sectionHeader(for source: SessionSource, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: source == .cli ? "terminal" : "display")
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.color(for: source))
+            Text(source.label.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(Theme.color(for: source))
+            Spacer()
+            Text("\(count)")
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 
     private func workspaceRow(_ ws: Workspace) -> some View {
@@ -107,9 +213,9 @@ struct SidebarView_: View {
                     .rotationEffect(expanded.contains(ws.id) ? .degrees(90) : .zero)
                     .animation(.easeInOut(duration: 0.15), value: expanded.contains(ws.id))
 
-                Image(systemName: "folder.fill")
+                Image(systemName: ws.source == .cli ? "terminal.fill" : "folder.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(Theme.accent)
+                    .foregroundStyle(Theme.color(for: ws.source))
 
                 Text(ws.name)
                     .font(.system(size: 13))
@@ -148,25 +254,27 @@ struct SidebarView_: View {
     @ViewBuilder
     private func sessionRow(ws: Workspace, session: SessionSummary) -> some View {
         let selected = selectedSession?.sessionId == session.id
+        let selectedColor: Color = ws.source == .cli ? Theme.cliAccent : Theme.accent
         Button {
             onSelect(ws.id, session.id)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "message")
+                Image(systemName: ws.source == .cli ? "terminal" : "message")
                     .font(.system(size: 11))
+                    .foregroundStyle(ws.source == .cli ? Theme.cliAccent : Theme.textSecondary)
                 Text(session.title.isEmpty ? "Untitled session" : session.title)
                     .font(.system(size: 12))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .foregroundStyle(selected ? Theme.accent : Theme.textSecondary)
+            .foregroundStyle(selected ? selectedColor : Theme.textSecondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(selected ? Theme.accent.opacity(0.15) : Color.clear)
+                    .fill(selected ? selectedColor.opacity(0.15) : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -178,6 +286,15 @@ struct SidebarView_: View {
             expanded.remove(id)
         } else {
             expanded.insert(id)
+        }
+    }
+}
+
+extension SessionSource {
+    var label: String {
+        switch self {
+        case .ide: return "IDE"
+        case .cli: return "CLI"
         }
     }
 }

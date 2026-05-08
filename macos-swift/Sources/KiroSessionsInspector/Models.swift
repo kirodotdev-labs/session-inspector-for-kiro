@@ -1,9 +1,17 @@
 import Foundation
 
+// MARK: - Source (IDE vs CLI)
+
+enum SessionSource: String, Codable, Hashable, CaseIterable {
+    case ide
+    case cli
+}
+
 // MARK: - View models exposed to the UI
 
 struct Workspace: Identifiable, Hashable {
-    let id: String            // base64url directory name
+    let id: String            // e.g. "ide:<base64url>" or "cli:<base64url>"
+    let source: SessionSource
     let path: String          // decoded absolute workspace path
     let name: String          // last path component
     var sessions: [SessionSummary]
@@ -15,10 +23,12 @@ struct SessionSummary: Identifiable, Hashable {
     let id: String            // sessionId
     let title: String
     let date: Double          // unix ms
+    let source: SessionSource
 }
 
 struct SessionDetail: Identifiable {
     let id: String
+    let source: SessionSource
     let title: String
     let model: String
     let autonomyMode: String
@@ -42,6 +52,7 @@ struct HistoryMessage: Identifiable {
 struct AgentAction: Identifiable {
     let id = UUID()
     let actionType: String
+    let rawToolName: String?
     let actionState: String?
     let input: JSONValue?
     let output: JSONValue?
@@ -58,6 +69,13 @@ struct DashboardData {
     var sessionTypes: [String: Int]
     var autonomyModes: [String: Int]
     var workspaces: [WorkspaceStats]
+    var sourceStats: [SessionSource: SourceStats]
+}
+
+struct SourceStats {
+    var sessions: Int
+    var executions: Int
+    var cost: Double
 }
 
 struct DailyStats: Identifiable {
@@ -66,11 +84,18 @@ struct DailyStats: Identifiable {
     var sessions: Int
     var cost: Double
     var executions: Int
+    var ideSessions: Int
+    var cliSessions: Int
+    var ideCost: Double
+    var cliCost: Double
+    var ideExecutions: Int
+    var cliExecutions: Int
 }
 
 struct WorkspaceStats: Identifiable {
-    var id: String { name }
+    var id: String { "\(source.rawValue):\(name)" }
     let name: String
+    let source: SessionSource
     let cost: Double
     let sessions: Int
     let executions: Int
