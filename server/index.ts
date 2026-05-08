@@ -218,6 +218,9 @@ app.get("/api/dashboard", (_req, res) => {
   const dailyStats: Record<string, { sessions: number; cost: number; executions: number; actions: Record<string, number> }> = {};
   const modelUsage: Record<string, number> = {};
   const workspaceStats: Record<string, { name: string; cost: number; sessions: number; executions: number }> = {};
+  const sessionTypes: Record<string, number> = {};
+  const autonomyModes: Record<string, number> = {};
+  const modelSessions: Record<string, number> = {};
   let totalCost = 0;
   let totalExecutions = 0;
   let totalSessions = 0;
@@ -234,6 +237,20 @@ app.get("/api/dashboard", (_req, res) => {
     const wsExecDir = path.join(GLOBAL_STORAGE, wsHash);
 
     totalSessions += sessions.length;
+
+    // Read individual session files for model/type/mode stats
+    for (const s of sessions) {
+      const sessionFile = path.join(SESSIONS_DIR, d.name, `${s.sessionId}.json`);
+      try {
+        const sData = JSON.parse(fs.readFileSync(sessionFile, "utf-8"));
+        const model = sData.selectedModel || sData.defaultModelTitle || "unknown";
+        const sType = sData.sessionType || "unknown";
+        const aMode = sData.autonomyMode || "unknown";
+        modelSessions[model] = (modelSessions[model] || 0) + 1;
+        sessionTypes[sType] = (sessionTypes[sType] || 0) + 1;
+        autonomyModes[aMode] = (autonomyModes[aMode] || 0) + 1;
+      } catch {}
+    }
 
     // Track sessions by date
     for (const s of sessions) {
@@ -307,6 +324,9 @@ app.get("/api/dashboard", (_req, res) => {
     totalExecutions,
     daily,
     modelUsage,
+    modelSessions,
+    sessionTypes,
+    autonomyModes,
     workspaces,
   });
 });

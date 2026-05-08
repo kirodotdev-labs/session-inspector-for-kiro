@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Coins, Activity, Layers, FolderOpen, TrendingUp } from "lucide-react";
+import { clsx } from "clsx";
 
 interface DashboardData {
   totalCost: number;
@@ -7,6 +8,9 @@ interface DashboardData {
   totalExecutions: number;
   daily: { date: string; sessions: number; cost: number; executions: number; actions: Record<string, number> }[];
   modelUsage: Record<string, number>;
+  modelSessions: Record<string, number>;
+  sessionTypes: Record<string, number>;
+  autonomyModes: Record<string, number>;
   workspaces: { name: string; cost: number; sessions: number; executions: number }[];
 }
 
@@ -98,6 +102,69 @@ export function Dashboard() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* Mode & Model breakdown */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">Session Type</h3>
+          <div className="space-y-2">
+            {Object.entries(data.sessionTypes).sort((a, b) => b[1] - a[1]).map(([type, count]) => {
+              const pct = (count / data.totalSessions) * 100;
+              return (
+                <div key={type} className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-[var(--text-primary)] capitalize">{type}</span>
+                    <span className="text-[var(--text-secondary)]">{count} ({pct.toFixed(0)}%)</span>
+                  </div>
+                  <div className="h-2 bg-[var(--bg-tertiary)] rounded overflow-hidden">
+                    <div className={clsx("h-full rounded", type === "spec" ? "bg-blue-500" : "bg-purple-500")} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">Autonomy Mode</h3>
+          <div className="space-y-2">
+            {Object.entries(data.autonomyModes).sort((a, b) => b[1] - a[1]).map(([mode, count]) => {
+              const pct = (count / data.totalSessions) * 100;
+              return (
+                <div key={mode} className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-[var(--text-primary)]">{mode}</span>
+                    <span className="text-[var(--text-secondary)]">{count} ({pct.toFixed(0)}%)</span>
+                  </div>
+                  <div className="h-2 bg-[var(--bg-tertiary)] rounded overflow-hidden">
+                    <div className={clsx("h-full rounded", mode === "Autopilot" ? "bg-green-500" : "bg-amber-500")} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">Model Usage</h3>
+          <div className="space-y-2">
+            {Object.entries(data.modelSessions).sort((a, b) => b[1] - a[1]).map(([model, count]) => {
+              const pct = (count / data.totalSessions) * 100;
+              return (
+                <div key={model} className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-[var(--text-primary)] truncate mr-2">{model}</span>
+                    <span className="text-[var(--text-secondary)] shrink-0">{count}</span>
+                  </div>
+                  <div className="h-2 bg-[var(--bg-tertiary)] rounded overflow-hidden">
+                    <div className="h-full rounded bg-[var(--accent)]" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 
