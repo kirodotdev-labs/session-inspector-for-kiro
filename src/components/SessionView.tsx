@@ -42,6 +42,8 @@ function ActionIcon({ type }: { type: string }) {
       return <PenLine size={12} className="text-orange-400" />;
     case "knowledge":
       return <BookOpen size={12} className="text-pink-400" />;
+    case "subagent":
+      return <Layers size={12} className="text-indigo-400" />;
     default:
       return <Zap size={12} className="text-[var(--text-secondary)]" />;
   }
@@ -77,6 +79,8 @@ function describeAction(action: Action): string {
       return Array.isArray(i.paths) ? i.paths.join(", ") : "diagnostics";
     case "knowledge":
       return i.command || i.query || "knowledge";
+    case "subagent":
+      return i.subAgentName || "sub-agent";
     default:
       return actionType;
   }
@@ -223,6 +227,11 @@ export function SessionView({ session }: Props) {
             {isCli ? <Terminal size={10} /> : <MonitorDot size={10} />}{" "}
             {isCli ? "Kiro CLI" : "Kiro IDE"}
           </span>
+          {isCli && session.cliVersion != null && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+              v{session.cliVersion}
+            </span>
+          )}
           <h2 className="text-lg font-medium truncate">
             {session.title || "Untitled"}
           </h2>

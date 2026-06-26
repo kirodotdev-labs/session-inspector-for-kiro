@@ -37,6 +37,8 @@ struct SessionDetail: Identifiable {
     let workspacePath: String
     let messageCount: Int
     let totalCost: Double
+    /// CLI session format version (2 or 3); nil for IDE sessions.
+    var cliVersion: Int? = nil
     let history: [HistoryMessage]
 }
 
@@ -155,6 +157,18 @@ indirect enum JSONValue: Codable {
         switch self {
         case .number(let n): return n
         case .string(let s): return Double(s)
+        default: return nil
+        }
+    }
+
+    var boolValue: Bool? {
+        switch self {
+        case .bool(let b): return b
+        case .number(let n): return n != 0
+        case .string(let s):
+            if s == "true" { return true }
+            if s == "false" { return false }
+            return nil
         default: return nil
         }
     }

@@ -33,6 +33,8 @@ export interface SessionDetail {
   workspacePath: string;
   messageCount: number;
   totalCost: number;
+  /** CLI session format version (2 or 3). Absent for IDE sessions. */
+  cliVersion?: number;
   history: {
     role: string;
     content: string;

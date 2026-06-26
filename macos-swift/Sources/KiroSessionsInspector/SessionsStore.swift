@@ -315,11 +315,19 @@ final class SessionsStore: ObservableObject {
     // MARK: - CLI session detail
 
     private func loadCliSessionDetail(sessionId: String) async -> SessionDetail? {
-        let metaFile = cliSessionsDir.appendingPathComponent("\(sessionId).json")
-        let traceFile = cliSessionsDir.appendingPathComponent("\(sessionId).jsonl")
-
-        return await Task.detached(priority: .userInitiated) { [metaFile, traceFile] in
-            SessionsStore.buildCliSessionDetail(metaFile: metaFile, traceFile: traceFile)
+        let cliDir = cliSessionsDir
+        return await Task.detached(priority: .userInitiated) { [cliDir, sessionId] in
+            // Locate the session across both v2 and v3 sources.
+            let metas = loadAllCliSessionMeta(at: cliDir)
+            guard let meta = metas.first(where: { $0.sessionId == sessionId }) else {
+                return nil
+            }
+            if meta.version == 3, let dir = meta.v3Dir {
+                return SessionsStore.buildCliV3SessionDetail(meta: meta, sessionDir: dir)
+            }
+            let metaFile = cliDir.appendingPathComponent("\(sessionId).json")
+            let traceFile = cliDir.appendingPathComponent("\(sessionId).jsonl")
+            return SessionsStore.buildCliSessionDetail(metaFile: metaFile, traceFile: traceFile)
         }.value
     }
 
@@ -476,23 +484,219 @@ final class SessionsStore: ObservableObject {
             workspacePath: meta.cwd,
             messageCount: history.count,
             totalCost: meta.totalCost,
+            cliVersion: 2,
             history: history
         )
     }
 
     private static nonisolated func normalizeCliToolType(_ name: String) -> String {
-        let n = name.lowercased()
-        switch n {
-        case "shell": return "runCommand"
-        case "read", "fs_read": return "readFiles"
-        case "write", "fs_write": return "write"
-        case "replace", "str_replace": return "replace"
-        case "create": return "create"
-        case "knowledge": return "knowledge"
-        default:
-            if n.contains("search") || n == "grep" { return "search" }
-            return name.isEmpty ? "tool" : name
+        if name.isEmpty { return "tool" }
+        // Collapse to lowercase alphanumerics so "execute_bash"/"executeBash" match.
+        let k = name.lowercased().filter { $0.isLetter || $0.isNumber }
+        let map: [String: String] = [
+            "shell": "runCommand",
+            "executebash": "runCommand",
+            "runcommand": "runCommand",
+            "commandexecution": "runCommand",
+            "read": "readFiles",
+            "fsread": "readFiles",
+            "readfile": "readFiles",
+            "readfiles": "readFiles",
+            "readmultiplefiles": "readFiles",
+            "write": "write",
+            "fswrite": "write",
+            "writefile": "write",
+            "replace": "replace",
+            "strreplace": "replace",
+            "create": "create",
+            "knowledge": "knowledge",
+            "listdirectory": "search",
+            "filesearch": "search",
+            "grepsearch": "search",
+            "grep": "search",
+            "invokesubagent": "subagent",
+        ]
+        if let mapped = map[k] { return mapped }
+        if k.contains("search") { return "search" }
+        return name
+    }
+
+    // MARK: - CLI v3 trace parsing
+
+    private static nonisolated func buildCliV3SessionDetail(meta: CliSessionMeta, sessionDir: URL) -> SessionDetail {
+        let messagesFile = sessionDir.appendingPathComponent("messages.jsonl")
+
+        // Parse all records once.
+        var records: [JSONValue] = []
+        let fm = FileManager.default
+        if fm.fileExists(atPath: messagesFile.path),
+           let raw = try? String(contentsOf: messagesFile, encoding: .utf8) {
+            for line in raw.split(separator: "\n") where !line.isEmpty {
+                if let data = line.data(using: .utf8),
+                   let rec = try? JSONDecoder().decode(JSONValue.self, from: data) {
+                    records.append(rec)
+                }
+            }
         }
+
+        // Pass 1: cost per executionId from usage_summary records.
+        var costByExec: [String: Double] = [:]
+        for rec in records {
+            let p = rec["payload"]
+            guard p?["type"]?.stringValue == "usage_summary" else { continue }
+            var c: Double = 0
+            for s in p?["promptTurnSummaries"]?.arrayValue ?? [] {
+                c += s["usage"]?.doubleValue ?? 0
+            }
+            if let eid = p?["executionId"]?.stringValue {
+                costByExec[eid, default: 0] += c
+            }
+        }
+
+        // Pass 2: build the message thread.
+        var history: [HistoryMessage] = []
+        var toolRefs: [String: (msgIndex: Int, actionIndex: Int)] = [:]
+        var costConsumed: Set<String> = []
+        var curAssistantIdx = -1
+        var curExecId: String? = nil
+
+        // Ensure there's a current assistant message for the given execution.
+        // Returns the index in `history`.
+        func ensureAssistant(_ execId: String?) -> Int {
+            if curAssistantIdx >= 0,
+               curAssistantIdx < history.count,
+               history[curAssistantIdx].role == "assistant",
+               curExecId == execId {
+                return curAssistantIdx
+            }
+            var cost: Double = 0
+            if let eid = execId, !costConsumed.contains(eid) {
+                cost = costByExec[eid] ?? 0
+                costConsumed.insert(eid)
+            }
+            history.append(HistoryMessage(
+                role: "assistant", content: "", executionId: execId,
+                actions: [], cost: cost
+            ))
+            curAssistantIdx = history.count - 1
+            curExecId = execId
+            return curAssistantIdx
+        }
+
+        for rec in records {
+            let p = rec["payload"]
+            let type = p?["type"]?.stringValue ?? ""
+            let execId = p?["executionId"]?.stringValue
+
+            switch type {
+            case "user":
+                let content = p?["content"]?.stringValue ?? ""
+                if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+                history.append(HistoryMessage(
+                    role: "user", content: content, executionId: nil,
+                    actions: [], cost: 0
+                ))
+                curAssistantIdx = -1
+                curExecId = nil
+
+            case "assistant":
+                let idx = ensureAssistant(execId)
+                let text = p?["content"]?.stringValue ?? ""
+                if !text.isEmpty {
+                    let msg = history[idx]
+                    let newContent = msg.content.isEmpty ? text : msg.content + "\n" + text
+                    history[idx] = HistoryMessage(
+                        role: msg.role, content: newContent, executionId: msg.executionId,
+                        actions: msg.actions, cost: msg.cost
+                    )
+                }
+
+            case "tool_call":
+                let idx = ensureAssistant(execId)
+                let name = p?["toolName"]?.stringValue ?? ""
+                let msg = history[idx]
+                var actions = msg.actions
+                let actionIndex = actions.count
+                actions.append(AgentAction(
+                    actionType: normalizeCliToolType(name),
+                    rawToolName: name,
+                    actionState: "Pending",
+                    input: p?["args"] ?? .object([:]),
+                    output: nil
+                ))
+                history[idx] = HistoryMessage(
+                    role: msg.role, content: msg.content, executionId: msg.executionId,
+                    actions: actions, cost: msg.cost
+                )
+                if let id = p?["toolCallId"]?.stringValue {
+                    toolRefs[id] = (msgIndex: idx, actionIndex: actionIndex)
+                }
+
+            case "tool_result":
+                guard let id = p?["toolCallId"]?.stringValue,
+                      let ref = toolRefs[id],
+                      ref.msgIndex < history.count,
+                      ref.actionIndex < history[ref.msgIndex].actions.count else { continue }
+                let state = (p?["success"]?.boolValue == false) ? "Error" : "Success"
+                // Content is usually a JSON string; parse it when possible.
+                var output: JSONValue? = p?["content"]
+                if let s = p?["content"]?.stringValue,
+                   let data = s.data(using: .utf8),
+                   let parsed = try? JSONDecoder().decode(JSONValue.self, from: data) {
+                    output = parsed
+                }
+                let msg = history[ref.msgIndex]
+                var actions = msg.actions
+                let old = actions[ref.actionIndex]
+                actions[ref.actionIndex] = AgentAction(
+                    actionType: old.actionType, rawToolName: old.rawToolName,
+                    actionState: state, input: old.input, output: output
+                )
+                history[ref.msgIndex] = HistoryMessage(
+                    role: msg.role, content: msg.content, executionId: msg.executionId,
+                    actions: actions, cost: msg.cost
+                )
+                toolRefs.removeValue(forKey: id)
+
+            case "sub_agent_start":
+                let parentExec = p?["parentExecutionId"]?.stringValue ?? execId
+                let idx = ensureAssistant(parentExec)
+                let msg = history[idx]
+                var actions = msg.actions
+                actions.append(AgentAction(
+                    actionType: "subagent",
+                    rawToolName: p?["subAgentName"]?.stringValue ?? "invoke_sub_agent",
+                    actionState: "Success",
+                    input: .object([
+                        "subAgentName": p?["subAgentName"] ?? .null,
+                        "prompt": p?["prompt"] ?? .null,
+                    ]),
+                    output: nil
+                ))
+                history[idx] = HistoryMessage(
+                    role: msg.role, content: msg.content, executionId: msg.executionId,
+                    actions: actions, cost: msg.cost
+                )
+
+            default:
+                break
+            }
+        }
+
+        return SessionDetail(
+            id: meta.sessionId,
+            source: .cli,
+            title: meta.title,
+            model: meta.model,
+            autonomyMode: meta.agentName,
+            sessionType: "cli",
+            contextUsage: meta.contextUsage,
+            workspacePath: meta.cwd,
+            messageCount: history.count,
+            totalCost: meta.totalCost,
+            cliVersion: 3,
+            history: history
+        )
     }
 
     // MARK: - Dashboard aggregation
@@ -733,6 +937,9 @@ private struct CliSessionMeta {
     let totalCost: Double
     let turnCount: Int
     let turnCosts: [Double]
+    var version: Int = 2
+    // v3 only: directory containing session.json + messages.jsonl
+    var v3Dir: URL? = nil
 }
 
 private func loadCliSessionMeta(at file: URL) -> CliSessionMeta? {
@@ -778,20 +985,127 @@ private func loadCliSessionMeta(at file: URL) -> CliSessionMeta? {
 
 private func loadAllCliSessionMeta(at cliDir: URL) -> [CliSessionMeta] {
     let fm = FileManager.default
-    guard fm.fileExists(atPath: cliDir.path),
-          let entries = try? fm.contentsOfDirectory(
-            at: cliDir,
-            includingPropertiesForKeys: nil,
+    var results: [CliSessionMeta] = []
+
+    // v2: flat directory of {id}.json + {id}.jsonl
+    if fm.fileExists(atPath: cliDir.path),
+       let entries = try? fm.contentsOfDirectory(
+        at: cliDir,
+        includingPropertiesForKeys: nil,
+        options: [.skipsHiddenFiles]
+       ) {
+        for url in entries where url.pathExtension == "json" {
+            if let meta = loadCliSessionMeta(at: url) {
+                results.append(meta)
+            }
+        }
+    }
+
+    // v3: ~/.kiro/sessions/{workspaceHash}/sess_{id}/  (parent of the cli dir)
+    let v3Root = cliDir.deletingLastPathComponent()
+    results.append(contentsOf: loadAllCliV3SessionMeta(at: v3Root, excluding: cliDir))
+
+    return results
+}
+
+/// Scans the v3 session tree: workspace-hash directories each containing
+/// `sess_{id}` directories with `session.json` + `messages.jsonl`.
+private func loadAllCliV3SessionMeta(at root: URL, excluding cliDir: URL) -> [CliSessionMeta] {
+    let fm = FileManager.default
+    guard fm.fileExists(atPath: root.path),
+          let wsDirs = try? fm.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
           ) else { return [] }
 
     var results: [CliSessionMeta] = []
-    for url in entries where url.pathExtension == "json" {
-        if let meta = loadCliSessionMeta(at: url) {
-            results.append(meta)
+    for ws in wsDirs {
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: ws.path, isDirectory: &isDir), isDir.boolValue else { continue }
+        if ws.lastPathComponent == "cli" { continue } // v2 lives here
+        guard let sessDirs = try? fm.contentsOfDirectory(
+            at: ws,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { continue }
+        for sess in sessDirs where sess.lastPathComponent.hasPrefix("sess_") {
+            if let meta = loadCliV3SessionMeta(at: sess) {
+                results.append(meta)
+            }
         }
     }
     return results
+}
+
+private func loadCliV3SessionMeta(at sessionDir: URL) -> CliSessionMeta? {
+    let metaFile = sessionDir.appendingPathComponent("session.json")
+    guard let data = try? Data(contentsOf: metaFile),
+          let json = try? JSONDecoder().decode(JSONValue.self, from: data),
+          let sid = json["id"]?.stringValue else {
+        return nil
+    }
+    let cwd = json["workspacePaths"]?.arrayValue?.first?.stringValue ?? ""
+    let createdMs = parseIsoMs(json["createdAt"]?.stringValue ?? "")
+    let updatedMs = parseIsoMs(json["lastModifiedAt"]?.stringValue ?? "")
+
+    let agg = scanCliV3Trace(at: sessionDir.appendingPathComponent("messages.jsonl"))
+
+    let autonomy: String
+    if json["autopilot"]?.boolValue == true {
+        autonomy = "Autopilot"
+    } else {
+        autonomy = json["agentMode"]?.stringValue ?? "Supervised"
+    }
+
+    return CliSessionMeta(
+        sessionId: sid,
+        title: json["title"]?.stringValue ?? "",
+        cwd: cwd,
+        createdAt: createdMs,
+        updatedAt: updatedMs > 0 ? updatedMs : createdMs,
+        model: json["modelId"]?.stringValue ?? "auto",
+        agentName: autonomy,
+        contextUsage: agg.contextUsage,
+        totalCost: agg.totalCost,
+        turnCount: agg.turnCount,
+        turnCosts: [],
+        version: 3,
+        v3Dir: sessionDir
+    )
+}
+
+/// Light scan of a v3 messages.jsonl for aggregate cost / turn count / context usage.
+private func scanCliV3Trace(at messagesFile: URL) -> (totalCost: Double, turnCount: Int, contextUsage: Double) {
+    let fm = FileManager.default
+    guard fm.fileExists(atPath: messagesFile.path),
+          let raw = try? String(contentsOf: messagesFile, encoding: .utf8) else {
+        return (0, 0, 0)
+    }
+    var totalCost: Double = 0
+    var turnCount = 0
+    var contextUsage: Double = 0
+    for line in raw.split(separator: "\n") where !line.isEmpty {
+        guard let data = line.data(using: .utf8),
+              let rec = try? JSONDecoder().decode(JSONValue.self, from: data) else { continue }
+        let p = rec["payload"]
+        switch p?["type"]?.stringValue ?? "" {
+        case "turn_start":
+            turnCount += 1
+        case "usage_summary":
+            for s in p?["promptTurnSummaries"]?.arrayValue ?? [] {
+                totalCost += s["usage"]?.doubleValue ?? 0
+            }
+        case "session_metadata":
+            if p?["key"]?.stringValue == "contextUsage",
+               let v = p?["value"]?["usagePercentage"]?.doubleValue {
+                contextUsage = v
+            }
+        default:
+            break
+        }
+    }
+    return (totalCost, turnCount, contextUsage)
 }
 
 private func parseIsoMs(_ s: String) -> Double {

@@ -13,6 +13,8 @@ const GLOBAL_STORAGE = path.join(
 );
 const SESSIONS_DIR = path.join(GLOBAL_STORAGE, "workspace-sessions");
 const CLI_SESSIONS_DIR = path.join(process.env.HOME!, ".kiro/sessions/cli");
+// v3 CLI sessions live directly under ~/.kiro/sessions/{sha256(workspacePath)[:16]}/sess_{id}/
+const CLI_V3_SESSIONS_DIR = path.join(process.env.HOME!, ".kiro/sessions");
 
 type Source = "ide" | "cli";
 
@@ -208,6 +210,9 @@ interface CliSessionMeta {
   contextUsage: number;
   totalCost: number;
   turnCount: number;
+  version: 2 | 3;
+  // v3 only: directory containing session.json + messages.jsonl
+  v3Dir?: string;
 }
 
 // Cache parsed CLI session metadata files
@@ -241,10 +246,119 @@ function loadCliSessionMeta(file: string): CliSessionMeta | null {
       contextUsage: ss.rts_model_state?.context_usage_percentage ?? lastCtx,
       totalCost,
       turnCount: turns.length,
+      version: 2,
     };
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// CLI v3 sessions (~/.kiro/sessions/{workspaceHash}/sess_{id}/)
+// Each session is a directory containing:
+//   session.json    — metadata (id, title, agentMode, workspacePaths, timestamps, modelId)
+//   messages.jsonl  — one record per line: { id, timestamp, payload: { type, ... } }
+// ---------------------------------------------------------------------------
+
+// Light scan of a v3 messages.jsonl for aggregate cost / turn count / context usage,
+// without building the full message history (used for the workspace list + dashboard).
+function scanCliV3Trace(messagesFile: string): {
+  totalCost: number;
+  turnCount: number;
+  contextUsage: number;
+} {
+  let totalCost = 0;
+  let turnCount = 0;
+  let contextUsage = 0;
+  if (!fs.existsSync(messagesFile))
+    return { totalCost, turnCount, contextUsage };
+  try {
+    const raw = fs.readFileSync(messagesFile, "utf-8");
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      let rec: any;
+      try {
+        rec = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const p = rec.payload || {};
+      if (p.type === "turn_start") {
+        turnCount++;
+      } else if (p.type === "usage_summary") {
+        for (const s of p.promptTurnSummaries || []) totalCost += s.usage || 0;
+      } else if (p.type === "session_metadata" && p.key === "contextUsage") {
+        const v = p.value?.usagePercentage;
+        if (typeof v === "number") contextUsage = v;
+      }
+    }
+  } catch {}
+  return { totalCost, turnCount, contextUsage };
+}
+
+function loadCliV3SessionMeta(sessionDir: string): CliSessionMeta | null {
+  try {
+    const metaFile = path.join(sessionDir, "session.json");
+    const data = JSON.parse(fs.readFileSync(metaFile, "utf-8"));
+    if (!data.id) return null;
+    const cwd = Array.isArray(data.workspacePaths)
+      ? data.workspacePaths[0] || ""
+      : "";
+    const createdAt = data.createdAt ? Date.parse(data.createdAt) : 0;
+    const updatedAt = data.lastModifiedAt
+      ? Date.parse(data.lastModifiedAt)
+      : createdAt;
+    const { totalCost, turnCount, contextUsage } = scanCliV3Trace(
+      path.join(sessionDir, "messages.jsonl"),
+    );
+    return {
+      sessionId: data.id,
+      title: data.title || "",
+      cwd,
+      createdAt,
+      updatedAt,
+      model: data.modelId || "auto",
+      // v3 has no agent_name; surface the autopilot/agent mode in the autonomy slot.
+      agentName: data.autopilot ? "Autopilot" : data.agentMode || "Supervised",
+      contextUsage,
+      totalCost,
+      turnCount,
+      version: 3,
+      v3Dir: sessionDir,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadAllCliV3SessionMeta(): CliSessionMeta[] {
+  const out: CliSessionMeta[] = [];
+  if (!fs.existsSync(CLI_V3_SESSIONS_DIR)) return out;
+  let workspaceDirs: fs.Dirent[];
+  try {
+    workspaceDirs = fs.readdirSync(CLI_V3_SESSIONS_DIR, {
+      withFileTypes: true,
+    });
+  } catch {
+    return out;
+  }
+  for (const wd of workspaceDirs) {
+    if (!wd.isDirectory()) continue;
+    if (wd.name === "cli") continue; // v2 lives here — skip
+    const wsDir = path.join(CLI_V3_SESSIONS_DIR, wd.name);
+    let sessEntries: fs.Dirent[];
+    try {
+      sessEntries = fs.readdirSync(wsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const se of sessEntries) {
+      if (!se.isDirectory() || !se.name.startsWith("sess_")) continue;
+      const meta = loadCliV3SessionMeta(path.join(wsDir, se.name));
+      if (meta) out.push(meta);
+    }
+  }
+  return out;
 }
 
 function loadAllCliSessionMeta(): CliSessionMeta[] {
@@ -252,16 +366,18 @@ function loadAllCliSessionMeta(): CliSessionMeta[] {
     return cliMetaCache.sessions;
   }
   const sessions: CliSessionMeta[] = [];
-  if (!fs.existsSync(CLI_SESSIONS_DIR)) {
-    cliMetaCache = { sessions, loadedAt: Date.now() };
-    return sessions;
+  if (fs.existsSync(CLI_SESSIONS_DIR)) {
+    const entries = fs.readdirSync(CLI_SESSIONS_DIR);
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      const file = path.join(CLI_SESSIONS_DIR, entry);
+      const meta = loadCliSessionMeta(file);
+      if (meta && meta.sessionId) sessions.push(meta);
+    }
   }
-  const entries = fs.readdirSync(CLI_SESSIONS_DIR);
-  for (const entry of entries) {
-    if (!entry.endsWith(".json")) continue;
-    const file = path.join(CLI_SESSIONS_DIR, entry);
-    const meta = loadCliSessionMeta(file);
-    if (meta && meta.sessionId) sessions.push(meta);
+  // v3 sessions
+  for (const meta of loadAllCliV3SessionMeta()) {
+    if (meta.sessionId) sessions.push(meta);
   }
   cliMetaCache = { sessions, loadedAt: Date.now() };
   return sessions;
@@ -298,19 +414,53 @@ function listCliWorkspaces() {
 }
 
 // Map CLI tool name to a normalized action type shared with the IDE view.
+// Handles both v2 (snake_case) and v3 (camelCase + snake_case) tool vocabularies.
 function normalizeCliToolType(name: string): string {
-  const n = (name || "").toLowerCase();
-  if (n === "shell") return "runCommand";
-  if (n === "read" || n === "fs_read") return "readFiles";
-  if (n === "write" || n === "fs_write") return "write";
-  if (n === "replace" || n === "str_replace") return "replace";
-  if (n === "create") return "create";
-  if (n === "knowledge") return "knowledge";
-  if (n.includes("search") || n === "grep") return "search";
-  return n || "tool";
+  if (!name) return "tool";
+  // Collapse to lowercase alphanumerics so "execute_bash"/"executeBash" match.
+  const k = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const map: Record<string, string> = {
+    shell: "runCommand",
+    executebash: "runCommand",
+    runcommand: "runCommand",
+    commandexecution: "runCommand",
+    read: "readFiles",
+    fsread: "readFiles",
+    readfile: "readFiles",
+    readfiles: "readFiles",
+    readmultiplefiles: "readFiles",
+    write: "write",
+    fswrite: "write",
+    writefile: "write",
+    replace: "replace",
+    strreplace: "replace",
+    create: "create",
+    knowledge: "knowledge",
+    listdirectory: "search",
+    filesearch: "search",
+    grepsearch: "search",
+    grep: "search",
+    invokesubagent: "subagent",
+  };
+  if (map[k]) return map[k];
+  if (k.includes("search")) return "search";
+  return name;
+}
+
+// Find a CLI session's metadata by id across both v2 and v3 sources.
+function findCliSessionMeta(sessionId: string): CliSessionMeta | null {
+  return (
+    loadAllCliSessionMeta().find((m) => m.sessionId === sessionId) || null
+  );
 }
 
 function getCliSession(sessionId: string) {
+  const meta = findCliSessionMeta(sessionId);
+  if (meta?.version === 3) return getCliV3Session(meta);
+  return getCliV2Session(sessionId);
+}
+
+function getCliV2Session(sessionId: string) {
   const metaFile = path.join(CLI_SESSIONS_DIR, `${sessionId}.json`);
   const traceFile = path.join(CLI_SESSIONS_DIR, `${sessionId}.jsonl`);
 
@@ -441,6 +591,170 @@ function getCliSession(sessionId: string) {
     workspacePath: meta.cwd,
     messageCount: history.length,
     totalCost: meta.totalCost,
+    cliVersion: 2,
+    history,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CLI v3 trace parsing
+// ---------------------------------------------------------------------------
+
+function getCliV3Session(meta: CliSessionMeta) {
+  const messagesFile = path.join(meta.v3Dir || "", "messages.jsonl");
+
+  type Action = {
+    actionType: string;
+    rawToolName: string;
+    actionState: string;
+    input: any;
+    output: any;
+  };
+  type Msg = {
+    role: string;
+    content: string;
+    executionId: string | null;
+    actions: Action[];
+    cost: number;
+  };
+
+  // Parse all records once.
+  const records: any[] = [];
+  if (fs.existsSync(messagesFile)) {
+    const raw = fs.readFileSync(messagesFile, "utf-8");
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        records.push(JSON.parse(line));
+      } catch {}
+    }
+  }
+
+  // Pass 1: cost per executionId from usage_summary records.
+  const costByExec = new Map<string, number>();
+  for (const rec of records) {
+    const p = rec.payload || {};
+    if (p.type === "usage_summary") {
+      let c = 0;
+      for (const s of p.promptTurnSummaries || []) c += s.usage || 0;
+      const eid = p.executionId;
+      if (eid) costByExec.set(eid, (costByExec.get(eid) || 0) + c);
+    }
+  }
+
+  // Pass 2: build the message thread.
+  const history: Msg[] = [];
+  const toolRefs = new Map<string, { msgIndex: number; actionIndex: number }>();
+  const costConsumed = new Set<string>();
+  let curAssistantIdx = -1;
+  let curExecId: string | null = null;
+
+  const ensureAssistant = (execId: string | null): Msg => {
+    if (
+      curAssistantIdx >= 0 &&
+      history[curAssistantIdx]?.role === "assistant" &&
+      curExecId === execId
+    ) {
+      return history[curAssistantIdx];
+    }
+    let cost = 0;
+    if (execId && !costConsumed.has(execId)) {
+      cost = costByExec.get(execId) || 0;
+      costConsumed.add(execId);
+    }
+    const msg: Msg = {
+      role: "assistant",
+      content: "",
+      executionId: execId,
+      actions: [],
+      cost,
+    };
+    history.push(msg);
+    curAssistantIdx = history.length - 1;
+    curExecId = execId;
+    return msg;
+  };
+
+  for (const rec of records) {
+    const p = rec.payload || {};
+    const type = p.type;
+    const execId: string | null = p.executionId ?? null;
+
+    if (type === "user") {
+      const content = typeof p.content === "string" ? p.content : "";
+      if (!content.trim()) continue;
+      history.push({
+        role: "user",
+        content,
+        executionId: null,
+        actions: [],
+        cost: 0,
+      });
+      // Break assistant accumulation so the next assistant turn starts fresh.
+      curAssistantIdx = -1;
+      curExecId = null;
+    } else if (type === "assistant") {
+      const msg = ensureAssistant(execId);
+      const text = typeof p.content === "string" ? p.content : "";
+      if (text) msg.content = msg.content ? msg.content + "\n" + text : text;
+    } else if (type === "tool_call") {
+      const msg = ensureAssistant(execId);
+      const name = p.toolName || "";
+      const actionIndex = msg.actions.length;
+      msg.actions.push({
+        actionType: normalizeCliToolType(name),
+        rawToolName: name,
+        actionState: "Pending",
+        input: p.args ?? {},
+        output: null,
+      });
+      if (p.toolCallId) {
+        toolRefs.set(p.toolCallId, {
+          msgIndex: curAssistantIdx,
+          actionIndex,
+        });
+      }
+    } else if (type === "tool_result") {
+      const ref = toolRefs.get(p.toolCallId);
+      if (!ref) continue;
+      const action = history[ref.msgIndex]?.actions?.[ref.actionIndex];
+      if (!action) continue;
+      action.actionState = p.success === false ? "Error" : "Success";
+      // Content is usually a JSON string; parse it when possible.
+      let body: any = p.content ?? null;
+      if (typeof body === "string") {
+        try {
+          body = JSON.parse(body);
+        } catch {
+          /* leave as string */
+        }
+      }
+      action.output = body;
+      toolRefs.delete(p.toolCallId);
+    } else if (type === "sub_agent_start") {
+      const msg = ensureAssistant(p.parentExecutionId ?? execId);
+      msg.actions.push({
+        actionType: "subagent",
+        rawToolName: p.subAgentName || "invoke_sub_agent",
+        actionState: "Success",
+        input: { subAgentName: p.subAgentName, prompt: p.prompt },
+        output: null,
+      });
+    }
+  }
+
+  return {
+    source: "cli" as Source,
+    sessionId: meta.sessionId,
+    title: meta.title,
+    model: meta.model,
+    autonomyMode: meta.agentName,
+    sessionType: "cli",
+    contextUsage: meta.contextUsage,
+    workspacePath: meta.cwd,
+    messageCount: history.length,
+    totalCost: meta.totalCost,
+    cliVersion: 3,
     history,
   };
 }

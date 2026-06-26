@@ -41,6 +41,23 @@ struct SessionScreen: View {
                         .stroke(Theme.color(for: session.source).opacity(0.3), lineWidth: 1)
                 )
 
+                if isCli, let v = session.cliVersion {
+                    Text("v\(v)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(Theme.cliAccent)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Theme.cliAccent.opacity(0.1))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Theme.cliAccent.opacity(0.25), lineWidth: 1)
+                        )
+                }
+
                 Text(session.title.isEmpty ? "Untitled" : session.title)
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
@@ -329,6 +346,7 @@ private struct ActionBlock: View {
         case "replace", "write", "create": return "square.and.pencil"
         case "getDiagnostics": return "exclamationmark.triangle"
         case "knowledge": return "book"
+        case "subagent": return "square.stack.3d.up"
         default: return "bolt"
         }
     }
@@ -340,6 +358,7 @@ private struct ActionBlock: View {
         case "search": return Theme.cyan
         case "replace", "write", "create": return Theme.orange
         case "knowledge": return Theme.pink
+        case "subagent": return Theme.accent
         default: return Theme.textSecondary
         }
     }
@@ -381,6 +400,8 @@ private struct ActionBlock: View {
             return input?["command"]?.stringValue
                 ?? input?["query"]?.stringValue
                 ?? "knowledge"
+        case "subagent":
+            return input?["subAgentName"]?.stringValue ?? "sub-agent"
         default:
             return action.actionType
         }
