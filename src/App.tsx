@@ -2,8 +2,12 @@ import { useState, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
+import { WorkspacesView } from "./components/WorkspacesView";
+import type { Source } from "./lib/source";
 
-export type Source = "ide" | "cli";
+export type { Source };
+
+export type View = "dashboard" | "sessions" | "workspaces";
 
 export interface Workspace {
   id: string;
@@ -33,7 +37,9 @@ export interface SessionDetail {
   workspacePath: string;
   messageCount: number;
   totalCost: number;
-  /** CLI session format version (2 or 3). Absent for IDE sessions. */
+  /** Wall-clock duration from session start to last activity, in ms. */
+  durationMs?: number;
+  /** Legacy CLI (v2) session format version. Absent for IDE/Unified sessions. */
   cliVersion?: number;
   history: {
     role: string;
@@ -54,7 +60,7 @@ function App() {
   } | null>(null);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState<"dashboard" | "sessions">("dashboard");
+  const [view, setView] = useState<View>("dashboard");
 
   useEffect(() => {
     fetch(`${API}/workspaces`)
@@ -90,6 +96,14 @@ function App() {
       <main className="flex-1 overflow-y-auto">
         {view === "dashboard" ? (
           <Dashboard />
+        ) : view === "workspaces" ? (
+          <WorkspacesView
+            workspaces={workspaces}
+            onSelectSession={(workspaceId, sessionId) => {
+              setSelectedSession({ workspaceId, sessionId });
+              setView("sessions");
+            }}
+          />
         ) : loading ? (
           <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
             Loading session...

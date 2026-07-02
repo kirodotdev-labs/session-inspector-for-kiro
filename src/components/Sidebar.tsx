@@ -5,53 +5,25 @@ import {
   MessageSquare,
   LayoutDashboard,
   List,
-  Terminal,
-  MonitorDot,
+  Boxes,
+  SlidersHorizontal,
 } from "lucide-react";
 import { clsx } from "clsx";
-import type { Source, Workspace } from "../App";
+import type { Workspace, View } from "../App";
+import type { Source } from "../lib/source";
+import { ALL_SOURCES, SOURCE_LABELS, SOURCE_TEXT_CLASS } from "../lib/source";
+import { SourceIcon } from "./SourceIcon";
+import { useSettings } from "../lib/useSettings";
 
 interface Props {
   workspaces: Workspace[];
   selectedSession: { workspaceId: string; sessionId: string } | null;
   onSelect: (workspaceId: string, sessionId: string) => void;
-  view: "dashboard" | "sessions";
-  onViewChange: (view: "dashboard" | "sessions") => void;
+  view: View;
+  onViewChange: (view: View) => void;
 }
 
 type SourceFilter = "all" | Source;
-
-const SOURCE_LABELS: Record<Source, string> = {
-  ide: "IDE",
-  cli: "CLI",
-};
-
-const SOURCE_COLORS: Record<Source, string> = {
-  ide: "text-[var(--accent)]",
-  cli: "text-emerald-400",
-};
-
-function SourceIcon({
-  source,
-  className,
-}: {
-  source: Source;
-  className?: string;
-}) {
-  if (source === "cli")
-    return (
-      <Terminal
-        size={14}
-        className={clsx("shrink-0", className ?? "text-emerald-400")}
-      />
-    );
-  return (
-    <MonitorDot
-      size={14}
-      className={clsx("shrink-0", className ?? "text-[var(--accent)]")}
-    />
-  );
-}
 
 export function Sidebar({
   workspaces,
@@ -62,6 +34,7 @@ export function Sidebar({
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const { showNonUnified, setShowNonUnified } = useSettings();
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -75,6 +48,7 @@ export function Sidebar({
     const totals: Record<Source, { workspaces: number; sessions: number }> = {
       ide: { workspaces: 0, sessions: 0 },
       cli: { workspaces: 0, sessions: 0 },
+      unified: { workspaces: 0, sessions: 0 },
     };
     for (const ws of workspaces) {
       totals[ws.source].workspaces += 1;
@@ -83,19 +57,29 @@ export function Sidebar({
     return totals;
   }, [workspaces]);
 
+  // Setting overrides the source tabs: only Unified sessions are shown.
+  const settingScopedWorkspaces = useMemo(() => {
+    if (!showNonUnified) return workspaces.filter((w) => w.source === "unified");
+    return workspaces;
+  }, [workspaces, showNonUnified]);
+
   const visibleWorkspaces = useMemo(() => {
-    if (sourceFilter === "all") return workspaces;
-    return workspaces.filter((w) => w.source === sourceFilter);
-  }, [workspaces, sourceFilter]);
+    if (!showNonUnified || sourceFilter === "all") return settingScopedWorkspaces;
+    return settingScopedWorkspaces.filter((w) => w.source === sourceFilter);
+  }, [settingScopedWorkspaces, sourceFilter, showNonUnified]);
 
   const grouped = useMemo(() => {
     const ide = visibleWorkspaces.filter((w) => w.source === "ide");
     const cli = visibleWorkspaces.filter((w) => w.source === "cli");
-    return { ide, cli };
+    const unified = visibleWorkspaces.filter((w) => w.source === "unified");
+    return { ide, cli, unified };
   }, [visibleWorkspaces]);
 
-  const totalWorkspaces = counts.ide.workspaces + counts.cli.workspaces;
-  const totalSessions = counts.ide.sessions + counts.cli.sessions;
+  const totalWorkspaces = visibleWorkspaces.length;
+  const totalSessions = visibleWorkspaces.reduce(
+    (sum, w) => sum + w.sessionCount,
+    0,
+  );
 
   return (
     <aside className="w-80 h-full border-r border-[var(--border)] bg-[var(--bg-secondary)] flex flex-col">
@@ -107,13 +91,21 @@ export function Sidebar({
           {totalWorkspaces} workspaces • {totalSessions} sessions
         </p>
         <div className="flex items-center gap-2 mt-2 text-[10px] text-[var(--text-secondary)]">
+          {showNonUnified && (
+            <>
+              <span className="flex items-center gap-1">
+                <SourceIcon source="ide" size={10} /> {SOURCE_LABELS.ide}{" "}
+                {counts.ide.sessions}
+              </span>
+              <span className="flex items-center gap-1">
+                <SourceIcon source="cli" size={10} /> {SOURCE_LABELS.cli}{" "}
+                {counts.cli.sessions}
+              </span>
+            </>
+          )}
           <span className="flex items-center gap-1">
-            <MonitorDot size={10} className="text-[var(--accent)]" /> IDE{" "}
-            {counts.ide.sessions}
-          </span>
-          <span className="flex items-center gap-1">
-            <Terminal size={10} className="text-emerald-400" /> CLI{" "}
-            {counts.cli.sessions}
+            <SourceIcon source="unified" size={10} /> {SOURCE_LABELS.unified}{" "}
+            {counts.unified.sessions}
           </span>
         </div>
       </div>
@@ -131,6 +123,17 @@ export function Sidebar({
           <LayoutDashboard size={12} /> Dashboard
         </button>
         <button
+          onClick={() => onViewChange("workspaces")}
+          className={clsx(
+            "flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors",
+            view === "workspaces"
+              ? "text-[var(--accent)] border-b-2 border-[var(--accent)]"
+              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+          )}
+        >
+          <Boxes size={12} /> Workspaces
+        </button>
+        <button
           onClick={() => onViewChange("sessions")}
           className={clsx(
             "flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors",
@@ -143,34 +146,35 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="flex gap-1 p-2 border-b border-[var(--border)] bg-[var(--bg-primary)]/20">
-        {(["all", "ide", "cli"] as SourceFilter[]).map((f) => (
-          <button
-            key={f}
-            onClick={() => setSourceFilter(f)}
-            className={clsx(
-              "flex-1 px-2 py-1 text-[11px] rounded transition-colors flex items-center justify-center gap-1",
-              sourceFilter === f
-                ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
-                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-            )}
-          >
-            {f === "ide" && <MonitorDot size={10} />}
-            {f === "cli" && <Terminal size={10} />}
-            {f === "all" ? "All" : SOURCE_LABELS[f]}
-          </button>
-        ))}
-      </div>
+      {showNonUnified && (
+        <div className="flex gap-1 p-2 border-b border-[var(--border)] bg-[var(--bg-primary)]/20">
+          {(["all", ...ALL_SOURCES] as SourceFilter[]).map((f) => (
+            <button
+              key={f}
+              onClick={() => setSourceFilter(f)}
+              className={clsx(
+                "flex-1 px-2 py-1 text-[11px] rounded transition-colors flex items-center justify-center gap-1",
+                sourceFilter === f
+                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+              )}
+            >
+              {f !== "all" && <SourceIcon source={f} size={10} />}
+              {f === "all" ? "All" : SOURCE_LABELS[f]}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
-        {(["ide", "cli"] as Source[]).map((source) => {
-          const list = source === "ide" ? grouped.ide : grouped.cli;
+        {ALL_SOURCES.map((source) => {
+          const list = grouped[source];
           if (list.length === 0) return null;
           return (
             <div key={source}>
               <div className="flex items-center gap-1.5 px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">
                 <SourceIcon source={source} />
-                <span className={SOURCE_COLORS[source]}>
+                <span className={SOURCE_TEXT_CLASS[source]}>
                   {SOURCE_LABELS[source]}
                 </span>
                 <span className="ml-auto text-[var(--text-secondary)]">
@@ -191,16 +195,13 @@ export function Sidebar({
                           expanded.has(ws.id) && "rotate-90",
                         )}
                       />
-                      {source === "cli" ? (
-                        <Terminal
-                          size={14}
-                          className="text-emerald-400 shrink-0"
-                        />
-                      ) : (
+                      {source === "ide" ? (
                         <FolderOpen
                           size={14}
                           className="text-[var(--accent)] shrink-0"
                         />
+                      ) : (
+                        <SourceIcon source={source} size={14} />
                       )}
                       <span className="truncate flex-1">{ws.name}</span>
                       <span className="text-xs text-[var(--text-secondary)] tabular-nums">
@@ -221,17 +222,16 @@ export function Sidebar({
                                 selectedSession?.sessionId === s.id
                                   ? source === "cli"
                                     ? "bg-emerald-500/15 text-emerald-300"
-                                    : "bg-[var(--accent)]/15 text-[var(--accent)]"
+                                    : source === "unified"
+                                      ? "bg-violet-500/15 text-violet-300"
+                                      : "bg-[var(--accent)]/15 text-[var(--accent)]"
                                   : "hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)]",
                               )}
                             >
-                              {source === "cli" ? (
-                                <Terminal
-                                  size={12}
-                                  className="shrink-0 text-emerald-400"
-                                />
-                              ) : (
+                              {source === "ide" ? (
                                 <MessageSquare size={12} className="shrink-0" />
+                              ) : (
+                                <SourceIcon source={source} size={12} />
                               )}
                               <span className="truncate">
                                 {s.title || "Untitled session"}
@@ -252,6 +252,17 @@ export function Sidebar({
           </div>
         )}
       </div>
+
+      <label className="flex items-center gap-2 px-3 py-2.5 border-t border-[var(--border)] bg-[var(--bg-secondary)] text-xs text-[var(--text-secondary)] cursor-pointer">
+        <SlidersHorizontal size={11} />
+        <span className="flex-1">Show non-unified sessions</span>
+        <input
+          type="checkbox"
+          checked={showNonUnified}
+          onChange={(e) => setShowNonUnified(e.target.checked)}
+          className="accent-[var(--accent)]"
+        />
+      </label>
     </aside>
   );
 }

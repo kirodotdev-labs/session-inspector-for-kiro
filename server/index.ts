@@ -16,7 +16,15 @@ const CLI_SESSIONS_DIR = path.join(process.env.HOME!, ".kiro/sessions/cli");
 // v3 CLI sessions live directly under ~/.kiro/sessions/{sha256(workspacePath)[:16]}/sess_{id}/
 const CLI_V3_SESSIONS_DIR = path.join(process.env.HOME!, ".kiro/sessions");
 
-type Source = "ide" | "cli";
+// Kiro CLI v3 and the new IDE share the same session format and storage, so
+// those sessions are surfaced as "unified" rather than "CLI v3" — a distinct
+// source alongside the legacy `ide` and `cli` (v2) sources.
+type Source = "ide" | "cli" | "unified";
+
+/** Maps a CLI-family session's on-disk format version to its UI source. */
+function cliSourceForVersion(version: 2 | 3): Source {
+  return version === 3 ? "unified" : "cli";
+}
 
 function decodeBase64Url(str: string): string {
   const tryDecode = (s: string): string | null => {
@@ -112,6 +120,21 @@ function extractCostIde(executionData: any): number {
   return summary.reduce((sum: number, s: any) => sum + (s.usage || 0), 0);
 }
 
+// Active time for one IDE turn: from the execution start (≈ when the user
+// submitted) to the agent's last emitted action (its final response). Using
+// `emittedAt` — not `endTime` — avoids counting abort gaps and long-running
+// background processes whose end timestamps land hours/days later.
+function ideActiveMs(exec: any): number {
+  const st = exec?.startTime;
+  if (typeof st !== "number") return 0;
+  let lastEmit = st;
+  for (const a of exec.actions || []) {
+    const e = a?.emittedAt;
+    if (typeof e === "number" && e > lastEmit) lastEmit = e;
+  }
+  return lastEmit > st ? lastEmit - st : 0;
+}
+
 function listIdeWorkspaces() {
   if (!fs.existsSync(SESSIONS_DIR)) return [];
   const dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true });
@@ -180,6 +203,17 @@ function getIdeSession(workspaceId: string, sessionId: string) {
     return { role: msg.role || "unknown", content, executionId, actions, cost };
   });
 
+  // Active time: sum each turn's agent work (start → last emitted action),
+  // which excludes idle gaps where the user steps away between turns.
+  const seenExec = new Set<string>();
+  let durationMs = 0;
+  for (const h of history) {
+    if (!h.executionId || seenExec.has(h.executionId)) continue;
+    seenExec.add(h.executionId);
+    const execData = execMap.get(h.executionId);
+    if (execData) durationMs += ideActiveMs(execData);
+  }
+
   return {
     source: "ide" as Source,
     sessionId: data.sessionId,
@@ -191,6 +225,7 @@ function getIdeSession(workspaceId: string, sessionId: string) {
     workspacePath,
     messageCount: history.length,
     totalCost: history.reduce((sum: number, h: any) => sum + (h.cost || 0), 0),
+    durationMs,
     history,
   };
 }
@@ -383,33 +418,44 @@ function loadAllCliSessionMeta(): CliSessionMeta[] {
   return sessions;
 }
 
+// CLI-family sessions live in two on-disk layouts:
+// - v2: a flat directory of {id}.json + {id}.jsonl files -> "cli" source.
+// - v3: the shared "unified" format (also written by the new IDE) -> "unified" source.
+// Grouped by (source, cwd) so v2 and v3 never merge, even when they share a cwd.
 function listCliWorkspaces() {
   const sessions = loadAllCliSessionMeta();
-  const byCwd = new Map<string, CliSessionMeta[]>();
+  const bySourceCwd = new Map<
+    string,
+    { source: Source; cwd: string; list: CliSessionMeta[] }
+  >();
   for (const s of sessions) {
+    const source = cliSourceForVersion(s.version);
     const cwd = s.cwd || "(unknown)";
-    const list = byCwd.get(cwd) || [];
-    list.push(s);
-    byCwd.set(cwd, list);
+    const key = `${source}|${cwd}`;
+    const entry = bySourceCwd.get(key) || { source, cwd, list: [] };
+    entry.list.push(s);
+    bySourceCwd.set(key, entry);
   }
-  const workspaces = Array.from(byCwd.entries()).map(([cwd, list]) => {
-    const name = cwd.split("/").filter(Boolean).pop() || cwd;
-    return {
-      id: `cli:${Buffer.from(cwd).toString("base64url")}`,
-      source: "cli" as Source,
-      path: cwd,
-      name,
-      sessionCount: list.length,
-      sessions: list
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .map((s) => ({
-          id: s.sessionId,
-          title: s.title,
-          date: s.updatedAt || s.createdAt,
-          source: "cli" as Source,
-        })),
-    };
-  });
+  const workspaces = Array.from(bySourceCwd.values()).map(
+    ({ source, cwd, list }) => {
+      const name = cwd.split("/").filter(Boolean).pop() || cwd;
+      return {
+        id: `${source}:${Buffer.from(cwd).toString("base64url")}`,
+        source,
+        path: cwd,
+        name,
+        sessionCount: list.length,
+        sessions: list
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+          .map((s) => ({
+            id: s.sessionId,
+            title: s.title,
+            date: s.updatedAt || s.createdAt,
+            source,
+          })),
+      };
+    },
+  );
   return workspaces.sort((a, b) => b.sessionCount - a.sessionCount);
 }
 
@@ -592,6 +638,7 @@ function getCliV2Session(sessionId: string) {
     messageCount: history.length,
     totalCost: meta.totalCost,
     cliVersion: 2,
+    durationMs: Math.max(0, (meta.updatedAt || 0) - (meta.createdAt || 0)),
     history,
   };
 }
@@ -744,17 +791,18 @@ function getCliV3Session(meta: CliSessionMeta) {
   }
 
   return {
-    source: "cli" as Source,
+    source: "unified" as Source,
     sessionId: meta.sessionId,
     title: meta.title,
     model: meta.model,
     autonomyMode: meta.agentName,
-    sessionType: "cli",
+    sessionType: "unified",
     contextUsage: meta.contextUsage,
     workspacePath: meta.cwd,
     messageCount: history.length,
     totalCost: meta.totalCost,
-    cliVersion: 3,
+    // No cliVersion tag: the "v3" tag is retired in favor of the Unified source.
+    durationMs: Math.max(0, (meta.updatedAt || 0) - (meta.createdAt || 0)),
     history,
   };
 }
@@ -773,7 +821,9 @@ app.get("/api/workspaces", (_req, res) => {
 app.get("/api/workspaces/:workspaceId/sessions/:sessionId", (req, res) => {
   const { workspaceId, sessionId } = req.params;
   try {
-    if (workspaceId.startsWith("cli:")) {
+    // Both legacy CLI (v2) and Unified (v3) sessions are parsed by the
+    // CLI-family loader, which locates the session by id across formats.
+    if (workspaceId.startsWith("cli:") || workspaceId.startsWith("unified:")) {
       res.json(getCliSession(sessionId));
     } else {
       const rawId = workspaceId.startsWith("ide:")
@@ -786,8 +836,12 @@ app.get("/api/workspaces/:workspaceId/sessions/:sessionId", (req, res) => {
   }
 });
 
-// Dashboard: aggregate stats across all workspaces and executions
-app.get("/api/dashboard", (_req, res) => {
+// Dashboard: aggregate stats across all workspaces and executions.
+// When `filterPath` is provided, only sessions/executions whose workspace path
+// (IDE) or cwd (CLI-family) match are included — used for the per-workspace
+// dashboard. When `sourceFilter` is provided, only that source is aggregated —
+// used for the Unified-only dashboard.
+function computeDashboard(filterPath?: string, sourceFilter?: Source) {
   const dailyStats: Record<
     string,
     {
@@ -800,6 +854,9 @@ app.get("/api/dashboard", (_req, res) => {
       cliCost: number;
       ideExecutions: number;
       cliExecutions: number;
+      unifiedSessions: number;
+      unifiedCost: number;
+      unifiedExecutions: number;
       actions: Record<string, number>;
     }
   > = {};
@@ -811,6 +868,7 @@ app.get("/api/dashboard", (_req, res) => {
       cost: number;
       sessions: number;
       executions: number;
+      duration: number;
       source: Source;
     }
   > = {};
@@ -823,10 +881,12 @@ app.get("/api/dashboard", (_req, res) => {
   > = {
     ide: { sessions: 0, executions: 0, cost: 0 },
     cli: { sessions: 0, executions: 0, cost: 0 },
+    unified: { sessions: 0, executions: 0, cost: 0 },
   };
   let totalCost = 0;
   let totalExecutions = 0;
   let totalSessions = 0;
+  let totalDuration = 0;
 
   const bucketDaily = (ts: number) => {
     const date = new Date(ts).toISOString().slice(0, 10);
@@ -841,13 +901,18 @@ app.get("/api/dashboard", (_req, res) => {
         cliCost: 0,
         ideExecutions: 0,
         cliExecutions: 0,
+        unifiedSessions: 0,
+        unifiedCost: 0,
+        unifiedExecutions: 0,
         actions: {},
       };
     return dailyStats[date];
   };
 
   // --- IDE ---
-  if (fs.existsSync(SESSIONS_DIR)) {
+  // Legacy IDE sessions are never Unified, so skip them entirely when the
+  // dashboard is scoped to a different source.
+  if ((!sourceFilter || sourceFilter === "ide") && fs.existsSync(SESSIONS_DIR)) {
     const dirs = fs
       .readdirSync(SESSIONS_DIR, { withFileTypes: true })
       .filter((d) => d.isDirectory());
@@ -862,6 +927,7 @@ app.get("/api/dashboard", (_req, res) => {
       if (!Array.isArray(sessions) || sessions.length === 0) continue;
 
       const decodedPath = decodeBase64Url(d.name);
+      if (filterPath && decodedPath !== filterPath) continue;
       const projectName =
         decodedPath.split("/").filter(Boolean).pop() || d.name;
       const wsHash = crypto
@@ -894,12 +960,16 @@ app.get("/api/dashboard", (_req, res) => {
         bucketDaily(Number(s.dateCreated)).ideSessions++;
       }
 
+      // Active time accumulator: sum of per-execution (end − start).
+      let wsDuration = 0;
+
       if (!fs.existsSync(wsExecDir)) {
         workspaceStats[`ide:${projectName}`] = {
           name: projectName,
           cost: 0,
           sessions: sessions.length,
           executions: 0,
+          duration: 0,
           source: "ide",
         };
         continue;
@@ -933,6 +1003,9 @@ app.get("/api/dashboard", (_req, res) => {
               totalCost += cost;
               sourceStats.ide.cost += cost;
 
+              // Active turn time: start → last emitted agent action.
+              wsDuration += ideActiveMs(data);
+
               const bucket = bucketDaily(data.startTime);
               bucket.cost += cost;
               bucket.executions++;
@@ -955,56 +1028,85 @@ app.get("/api/dashboard", (_req, res) => {
         cost: wsCost,
         sessions: sessions.length,
         executions: wsExecs,
+        duration: wsDuration,
         source: "ide",
       };
+      totalDuration += wsDuration;
     }
   }
 
-  // --- CLI ---
+  // --- CLI-family (legacy CLI v2 -> "cli", shared v3 format -> "unified") ---
   const cliSessions = loadAllCliSessionMeta();
   const cliWsAgg = new Map<
     string,
-    { cost: number; sessions: number; executions: number }
+    {
+      name: string;
+      source: Source;
+      cost: number;
+      sessions: number;
+      executions: number;
+      duration: number;
+    }
   >();
   for (const s of cliSessions) {
+    if (filterPath && s.cwd !== filterPath) continue;
+    const source = cliSourceForVersion(s.version);
+    if (sourceFilter && sourceFilter !== source) continue;
+
     totalSessions += 1;
-    sourceStats.cli.sessions += 1;
+    sourceStats[source].sessions += 1;
 
     modelSessions[s.model] = (modelSessions[s.model] || 0) + 1;
-    sessionTypes["cli"] = (sessionTypes["cli"] || 0) + 1;
+    sessionTypes[source] = (sessionTypes[source] || 0) + 1;
     autonomyModes[s.agentName] = (autonomyModes[s.agentName] || 0) + 1;
 
     // Count every turn as one "execution" to stay comparable with the IDE side.
     totalExecutions += s.turnCount;
-    sourceStats.cli.executions += s.turnCount;
+    sourceStats[source].executions += s.turnCount;
     totalCost += s.totalCost;
-    sourceStats.cli.cost += s.totalCost;
+    sourceStats[source].cost += s.totalCost;
     modelUsage[s.model] = (modelUsage[s.model] || 0) + s.totalCost;
 
+    const isUnified = source === "unified";
     const created = s.createdAt || s.updatedAt || Date.now();
     const createdBucket = bucketDaily(created);
     createdBucket.sessions++;
-    createdBucket.cliSessions++;
+    if (isUnified) createdBucket.unifiedSessions++;
+    else createdBucket.cliSessions++;
     // Attribute cost/executions to session's last update day.
     const updated = s.updatedAt || created;
     const bucket = bucketDaily(updated);
     bucket.cost += s.totalCost;
     bucket.executions += s.turnCount;
-    bucket.cliCost += s.totalCost;
-    bucket.cliExecutions += s.turnCount;
+    if (isUnified) {
+      bucket.unifiedCost += s.totalCost;
+      bucket.unifiedExecutions += s.turnCount;
+    } else {
+      bucket.cliCost += s.totalCost;
+      bucket.cliExecutions += s.turnCount;
+    }
 
     const projectName =
       (s.cwd || "(unknown)").split("/").filter(Boolean).pop() || "(unknown)";
-    const key = `cli:${projectName}`;
-    const prev = cliWsAgg.get(key) || { cost: 0, sessions: 0, executions: 0 };
+    const key = `${source}:${projectName}`;
+    const prev = cliWsAgg.get(key) || {
+      name: projectName,
+      source,
+      cost: 0,
+      sessions: 0,
+      executions: 0,
+      duration: 0,
+    };
+    const dur = Math.max(0, (s.updatedAt || 0) - (s.createdAt || 0));
+    totalDuration += dur;
     prev.cost += s.totalCost;
     prev.sessions += 1;
     prev.executions += s.turnCount;
+    prev.duration += dur;
     cliWsAgg.set(key, prev);
   }
   for (const [key, agg] of cliWsAgg) {
-    const name = key.slice(4);
-    workspaceStats[key] = { name, ...agg, source: "cli" };
+    workspaceStats[key] = agg;
   }
 
   const daily = Object.entries(dailyStats)
@@ -1014,10 +1116,11 @@ app.get("/api/dashboard", (_req, res) => {
     (a, b) => b.cost - a.cost,
   );
 
-  res.json({
+  return {
     totalCost,
     totalSessions,
     totalExecutions,
+    totalDuration,
     daily,
     modelUsage,
     modelSessions,
@@ -1025,7 +1128,32 @@ app.get("/api/dashboard", (_req, res) => {
     autonomyModes,
     workspaces,
     sourceStats,
-  });
+  };
+}
+
+app.get("/api/dashboard", (_req, res) => {
+  res.json(computeDashboard());
+});
+
+// Dashboard scoped to Unified (shared IDE+CLI format) sessions only.
+app.get("/api/unified-dashboard", (_req, res) => {
+  res.json(computeDashboard(undefined, "unified"));
+});
+
+// Per-workspace dashboard, scoped to a single workspace path (covers IDE and
+// CLI-family sessions for that path). Pass `?source=unified` to further
+// restrict it to Unified sessions only.
+app.get("/api/workspace-dashboard", (req, res) => {
+  const p = typeof req.query.path === "string" ? req.query.path : "";
+  if (!p) {
+    res.status(400).json({ error: "path query param required" });
+    return;
+  }
+  const source =
+    typeof req.query.source === "string"
+      ? (req.query.source as Source)
+      : undefined;
+  res.json(computeDashboard(p, source));
 });
 
 const PORT = 3001;

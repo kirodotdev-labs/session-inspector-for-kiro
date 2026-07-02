@@ -13,12 +13,15 @@ import {
   ChevronDown,
   ChevronRight,
   Coins,
-  MonitorDot,
   BookOpen,
+  Clock,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useState } from "react";
 import type { SessionDetail, Action } from "../App";
+import { formatDuration } from "../lib/format";
+import { SOURCE_BADGE_CLASS, SOURCE_DISPLAY_NAMES } from "../lib/source";
+import { SourceIcon } from "./SourceIcon";
 
 interface Props {
   session: SessionDetail;
@@ -218,15 +221,15 @@ export function SessionView({ session }: Props) {
         <div className="flex items-center gap-2 mb-2">
           <span
             className={clsx(
-              "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide",
-              isCli
-                ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
-                : "bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30",
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border",
+              SOURCE_BADGE_CLASS[session.source],
             )}
           >
-            {isCli ? <Terminal size={10} /> : <MonitorDot size={10} />}{" "}
-            {isCli ? "Kiro CLI" : "Kiro IDE"}
+            <SourceIcon source={session.source} size={10} />{" "}
+            {SOURCE_DISPLAY_NAMES[session.source]}
           </span>
+          {/* Legacy CLI (v2) keeps its version tag. The v3 tag is retired:
+              those sessions now surface as the "Unified" source instead. */}
           {isCli && session.cliVersion != null && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
               v{session.cliVersion}
@@ -256,6 +259,11 @@ export function SessionView({ session }: Props) {
           <span className="px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
             {session.messageCount} messages
           </span>
+          {session.durationMs != null && session.durationMs > 0 && (
+            <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+              <Clock size={12} /> {formatDuration(session.durationMs)}
+            </span>
+          )}
           {session.totalCost > 0 && (
             <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
               <Coins size={12} /> {session.totalCost.toFixed(2)} credits
@@ -272,9 +280,11 @@ export function SessionView({ session }: Props) {
               "rounded-lg p-4 text-sm leading-relaxed border",
               msg.role === "user"
                 ? "bg-[var(--bg-tertiary)] border-[var(--border)]"
-                : isCli
+                : session.source === "cli"
                   ? "bg-emerald-500/5 border-emerald-500/20"
-                  : "bg-[var(--bg-secondary)] border-[var(--border)]",
+                  : session.source === "unified"
+                    ? "bg-violet-500/5 border-violet-500/20"
+                    : "bg-[var(--bg-secondary)] border-[var(--border)]",
             )}
           >
             <div className="flex items-center gap-2 mb-2 text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
@@ -284,7 +294,11 @@ export function SessionView({ session }: Props) {
                 <Bot
                   size={12}
                   className={
-                    isCli ? "text-emerald-400" : "text-[var(--accent)]"
+                    session.source === "cli"
+                      ? "text-emerald-400"
+                      : session.source === "unified"
+                        ? "text-violet-400"
+                        : "text-[var(--accent)]"
                   }
                 />
               )}
