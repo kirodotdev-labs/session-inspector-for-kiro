@@ -1,5 +1,6 @@
 # KiroSessionsInspector — build and install targets.
 #
+#   make bump V=0.3.0 - set version (or V=major|minor|patch) in Info.plist
 #   make build      - release binary only
 #   make bundle     - KiroSessionsInspector.app in .build/bundle
 #   make install    - copy .app to /Applications and link CLI into /usr/local/bin
@@ -13,7 +14,12 @@ APP_BUNDLE  := $(BUNDLE_DIR)/$(APP_NAME).app
 PREFIX      ?= /usr/local
 APPS_DIR    ?= /Applications
 
-.PHONY: build bundle install uninstall run clean icon dmg zip dist
+.PHONY: build bundle install uninstall run clean icon dmg zip pkg dist bump
+
+# Bump the app version in Info.plist. Usage: make bump V=0.3.0 (or V=minor).
+V ?=
+bump:
+	./scripts/bump-version.sh $(V)
 
 icon:
 	./scripts/make-icon.sh
@@ -30,7 +36,10 @@ dmg: bundle
 zip: bundle
 	./scripts/make-zip.sh
 
-dist: dmg zip
+pkg: bundle
+	./scripts/make-pkg.sh
+
+dist: dmg zip pkg
 	@echo "Distributable artifacts in .build/dist/"
 
 install: bundle
