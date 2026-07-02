@@ -4,6 +4,7 @@ import { SessionView } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
 import { WorkspacesView } from "./components/WorkspacesView";
 import type { Source } from "./lib/source";
+import { listWorkspaces, getSessionDetail } from "./lib/api";
 
 export type { Source };
 
@@ -50,8 +51,6 @@ export interface SessionDetail {
   }[];
 }
 
-const API = "http://localhost:3001/api";
-
 function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedSession, setSelectedSession] = useState<{
@@ -63,22 +62,18 @@ function App() {
   const [view, setView] = useState<View>("dashboard");
 
   useEffect(() => {
-    fetch(`${API}/workspaces`)
-      .then((r) => r.json())
-      .then(setWorkspaces);
+    listWorkspaces().then(setWorkspaces);
   }, []);
 
   useEffect(() => {
     if (!selectedSession) return;
     setLoading(true);
-    fetch(
-      `${API}/workspaces/${encodeURIComponent(selectedSession.workspaceId)}/sessions/${selectedSession.sessionId}`,
-    )
-      .then((r) => r.json())
-      .then((d) => {
+    getSessionDetail(selectedSession.workspaceId, selectedSession.sessionId).then(
+      (d) => {
         setSession(d);
         setLoading(false);
-      });
+      },
+    );
   }, [selectedSession]);
 
   return (

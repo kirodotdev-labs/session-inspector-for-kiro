@@ -20,6 +20,11 @@ import {
 } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
 import { useSettings } from "../lib/useSettings";
+import {
+  getDashboard,
+  getUnifiedDashboard,
+  getWorkspaceDashboard,
+} from "../lib/api";
 
 interface DailyStats {
   date: string;
@@ -84,8 +89,6 @@ interface DashboardData {
   >;
 }
 
-const API = "http://localhost:3001/api";
-
 interface DashboardProps {
   /** When set, the dashboard is scoped to a single workspace path. */
   workspacePath?: string;
@@ -102,15 +105,15 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
 
   useEffect(() => {
     setLoading(true);
-    let url: string;
-    if (workspacePath) {
-      url = `${API}/workspace-dashboard?path=${encodeURIComponent(workspacePath)}`;
-      if (!showNonUnified) url += "&source=unified";
-    } else {
-      url = showNonUnified ? `${API}/dashboard` : `${API}/unified-dashboard`;
-    }
-    fetch(url)
-      .then((r) => r.json())
+    const promise = workspacePath
+      ? getWorkspaceDashboard<DashboardData>(
+          workspacePath,
+          showNonUnified ? undefined : "unified",
+        )
+      : showNonUnified
+        ? getDashboard<DashboardData>()
+        : getUnifiedDashboard<DashboardData>();
+    promise
       .then((d) => {
         setData(d);
         setLoading(false);
