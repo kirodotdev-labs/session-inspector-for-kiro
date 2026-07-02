@@ -15,13 +15,16 @@ import {
   Coins,
   BookOpen,
   Clock,
+  Copy,
+  Check,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { SessionDetail, Action } from "../App";
 import { formatDuration } from "../lib/format";
 import { SOURCE_BADGE_CLASS, SOURCE_DISPLAY_NAMES } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
+import { useSettings } from "../lib/useSettings";
 
 interface Props {
   session: SessionDetail;
@@ -213,21 +216,107 @@ function ActionBlock({ action }: { action: Action }) {
   );
 }
 
+/** Builds the shell command to resume this session from its workspace. */
+function resumeCommand(session: SessionDetail): string {
+  const flags = session.source === "unified" ? "--v3 " : "";
+  return `cd ${session.workspacePath} && kiro-cli ${flags}--resume-id ${session.sessionId}`;
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Clipboard API unavailable — fall back to a hidden textarea + execCommand.
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+  }
+}
+
+function SessionIdCopy({ session }: { session: SessionDetail }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [open]);
+
+  const copy = async (text: string) => {
+    await copyToClipboard(text);
+    setOpen(false);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div ref={rootRef} className="relative shrink-0 ml-auto">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="Copy session ID or resume command"
+        className="flex items-center gap-1 text-[11px] font-mono text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+      >
+        {copied ? (
+          <>
+            <Check size={11} className="text-green-400" /> Copied
+          </>
+        ) : (
+          <>
+            {session.sessionId}
+            <ChevronDown size={11} />
+          </>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-20 w-56 rounded-md border border-[var(--border)] bg-[var(--bg-secondary)] shadow-lg py-1 text-xs">
+          <button
+            onClick={() => copy(session.sessionId)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+          >
+            <Copy size={12} /> Copy session ID
+          </button>
+          <button
+            onClick={() => copy(resumeCommand(session))}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+          >
+            <Terminal size={12} /> Copy resume command
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SessionView({ session }: Props) {
   const isCli = session.source === "cli";
+  const { showNonUnified } = useSettings();
   return (
     <div className="max-w-4xl mx-auto p-6">
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-2">
-          <span
-            className={clsx(
-              "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border",
-              SOURCE_BADGE_CLASS[session.source],
-            )}
-          >
-            <SourceIcon source={session.source} size={10} />{" "}
-            {SOURCE_DISPLAY_NAMES[session.source]}
-          </span>
+          {/* Unified sessions are the default/only kind once non-unified
+              sessions are hidden, so the source badge is redundant there. */}
+          {(showNonUnified || session.source !== "unified") && (
+            <span
+              className={clsx(
+                "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border",
+                SOURCE_BADGE_CLASS[session.source],
+              )}
+            >
+              <SourceIcon source={session.source} size={10} />{" "}
+              {SOURCE_DISPLAY_NAMES[session.source]}
+            </span>
+          )}
           {/* Legacy CLI (v2) keeps its version tag. The v3 tag is retired:
               those sessions now surface as the "Unified" source instead. */}
           {isCli && session.cliVersion != null && (
@@ -239,8 +328,9 @@ export function SessionView({ session }: Props) {
             {session.title || "Untitled"}
           </h2>
         </div>
-        <div className="text-xs text-[var(--text-secondary)] mb-2 font-mono truncate">
-          {session.workspacePath}
+        <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)] mb-2 font-mono">
+          <span className="truncate">{session.workspacePath}</span>
+          <SessionIdCopy session={session} />
         </div>
         <div className="flex flex-wrap gap-3 text-xs text-[var(--text-secondary)]">
           <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
