@@ -136,9 +136,7 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
 
   const title = workspaceName
     ? `${workspaceName} — Dashboard`
-    : showNonUnified
-      ? "Usage Dashboard"
-      : "Unified Dashboard";
+    : "Usage Dashboard";
 
   if (!showNonUnified && data.totalSessions === 0) {
     return (
@@ -255,6 +253,7 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
               stats={data.sourceStats[source]}
               totalSessions={data.totalSessions}
               totalCost={data.totalCost}
+              showLabel={showNonUnified}
             />
           ))}
         </div>
@@ -266,7 +265,7 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
           <h3 className="text-sm font-medium text-[var(--text-secondary)]">
             Daily Activity (Last 30 Days)
           </h3>
-          <SourceLegend sources={presentSources} />
+          {showNonUnified && <SourceLegend sources={presentSources} />}
         </div>
         <div className="flex items-end gap-px" style={{ height: "128px" }}>
           {last30.map((d) => {
@@ -357,7 +356,7 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
           <h3 className="text-sm font-medium text-[var(--text-secondary)]">
             Weekly Spend
           </h3>
-          <SourceLegend sources={presentSources} />
+          {showNonUnified && <SourceLegend sources={presentSources} />}
         </div>
         <div className="space-y-1">
           {weeks.slice(-8).map((w) => {
@@ -397,46 +396,53 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
       </div>
 
       {/* Mode & Model breakdown */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
-          <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">
-            Session Type
-          </h3>
-          <div className="space-y-2">
-            {Object.entries(data.sessionTypes || {})
-              .sort((a, b) => b[1] - a[1])
-              .map(([type, count]) => {
-                const pct = (count / data.totalSessions) * 100;
-                return (
-                  <div key={type} className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-[var(--text-primary)] capitalize">
-                        {type}
-                      </span>
-                      <span className="text-[var(--text-secondary)]">
-                        {count} ({pct.toFixed(0)}%)
-                      </span>
+      <div
+        className={clsx(
+          "grid gap-4",
+          showNonUnified ? "grid-cols-3" : "grid-cols-2",
+        )}
+      >
+        {showNonUnified && (
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
+            <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">
+              Session Type
+            </h3>
+            <div className="space-y-2">
+              {Object.entries(data.sessionTypes || {})
+                .sort((a, b) => b[1] - a[1])
+                .map(([type, count]) => {
+                  const pct = (count / data.totalSessions) * 100;
+                  return (
+                    <div key={type} className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-[var(--text-primary)] capitalize">
+                          {type}
+                        </span>
+                        <span className="text-[var(--text-secondary)]">
+                          {count} ({pct.toFixed(0)}%)
+                        </span>
+                      </div>
+                      <div className="h-2 bg-[var(--bg-tertiary)] rounded overflow-hidden">
+                        <div
+                          className={clsx(
+                            "h-full rounded",
+                            type === "spec"
+                              ? "bg-blue-500"
+                              : type === "cli"
+                                ? "bg-emerald-500"
+                                : type === "unified"
+                                  ? "bg-violet-500"
+                                  : "bg-purple-500",
+                          )}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="h-2 bg-[var(--bg-tertiary)] rounded overflow-hidden">
-                      <div
-                        className={clsx(
-                          "h-full rounded",
-                          type === "spec"
-                            ? "bg-blue-500"
-                            : type === "cli"
-                              ? "bg-emerald-500"
-                              : type === "unified"
-                                ? "bg-violet-500"
-                                : "bg-purple-500",
-                        )}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3 text-[var(--text-secondary)]">
@@ -526,14 +532,16 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
               <span className="flex-1 truncate text-[var(--text-primary)]">
                 {ws.name}
               </span>
-              <span
-                className={clsx(
-                  "text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide font-semibold border",
-                  SOURCE_BADGE_CLASS[ws.source],
-                )}
-              >
-                {ws.source}
-              </span>
+              {showNonUnified && (
+                <span
+                  className={clsx(
+                    "text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide font-semibold border",
+                    SOURCE_BADGE_CLASS[ws.source],
+                  )}
+                >
+                  {ws.source}
+                </span>
+              )}
               <span className="text-xs text-[var(--text-secondary)]">
                 {ws.sessions} sessions
               </span>
@@ -593,11 +601,13 @@ function SourceCard({
   stats,
   totalSessions,
   totalCost,
+  showLabel = true,
 }: {
   source: Source;
   stats: { sessions: number; executions: number; cost: number };
   totalSessions: number;
   totalCost: number;
+  showLabel?: boolean;
 }) {
   const pct = totalSessions > 0 ? (stats.sessions / totalSessions) * 100 : 0;
   const costPct = totalCost > 0 ? (stats.cost / totalCost) * 100 : 0;
@@ -608,15 +618,17 @@ function SourceCard({
   };
   return (
     <div className={clsx("border rounded-lg p-4", cardBgClass[source])}>
-      <div
-        className={clsx(
-          "flex items-center gap-2 text-xs font-semibold uppercase tracking-wide mb-3",
-          SOURCE_TEXT_CLASS[source],
-        )}
-      >
-        <SourceIcon source={source} size={14} />
-        {SOURCE_DISPLAY_NAMES[source]}
-      </div>
+      {showLabel && (
+        <div
+          className={clsx(
+            "flex items-center gap-2 text-xs font-semibold uppercase tracking-wide mb-3",
+            SOURCE_TEXT_CLASS[source],
+          )}
+        >
+          <SourceIcon source={source} size={14} />
+          {SOURCE_DISPLAY_NAMES[source]}
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-3 text-xs">
         <div>
           <div className="text-[var(--text-secondary)]">Sessions</div>

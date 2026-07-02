@@ -179,22 +179,28 @@ function SessionGroups({
   unified: GroupedWorkspace;
   onSelectSession: (workspaceId: string, sessionId: string) => void;
 }) {
+  const { showNonUnified } = useSettings();
   return (
     <div className="space-y-3">
       {ALL_SOURCES.map((source) => {
         const ws = unified.bySource[source];
         if (!ws || ws.sessions.length === 0) return null;
+        // When non-unified sessions are hidden, unified is the only source
+        // in play — skip the redundant group header.
+        const showGroupHeader = showNonUnified;
         return (
           <div key={source}>
-            <div className="flex items-center gap-1.5 mb-1 text-[10px] uppercase tracking-wide">
-              <SourceIcon source={source} size={12} />
-              <span className={SOURCE_TEXT_CLASS[source]}>
-                {SOURCE_LABELS[source]}
-              </span>
-              <span className="text-[var(--text-secondary)]">
-                {ws.sessions.length}
-              </span>
-            </div>
+            {showGroupHeader && (
+              <div className="flex items-center gap-1.5 mb-1 text-[10px] uppercase tracking-wide">
+                <SourceIcon source={source} size={12} />
+                <span className={SOURCE_TEXT_CLASS[source]}>
+                  {SOURCE_LABELS[source]}
+                </span>
+                <span className="text-[var(--text-secondary)]">
+                  {ws.sessions.length}
+                </span>
+              </div>
+            )}
             <div className="space-y-0.5 ml-1 pl-2 border-l border-[var(--border)]">
               {ws.sessions
                 .slice()

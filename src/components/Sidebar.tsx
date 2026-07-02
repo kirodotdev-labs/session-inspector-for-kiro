@@ -91,24 +91,22 @@ export function Sidebar({
         <p className="text-xs text-[var(--text-secondary)] mt-1">
           {totalWorkspaces} workspaces • {totalSessions} sessions
         </p>
-        <div className="flex items-center gap-2 mt-2 text-[10px] text-[var(--text-secondary)]">
-          {showNonUnified && (
-            <>
-              <span className="flex items-center gap-1">
-                <SourceIcon source="ide" size={10} /> {SOURCE_LABELS.ide}{" "}
-                {counts.ide.sessions}
-              </span>
-              <span className="flex items-center gap-1">
-                <SourceIcon source="cli" size={10} /> {SOURCE_LABELS.cli}{" "}
-                {counts.cli.sessions}
-              </span>
-            </>
-          )}
-          <span className="flex items-center gap-1">
-            <SourceIcon source="unified" size={10} /> {SOURCE_LABELS.unified}{" "}
-            {counts.unified.sessions}
-          </span>
-        </div>
+        {showNonUnified && (
+          <div className="flex items-center gap-2 mt-2 text-[10px] text-[var(--text-secondary)]">
+            <span className="flex items-center gap-1">
+              <SourceIcon source="ide" size={10} /> {SOURCE_LABELS.ide}{" "}
+              {counts.ide.sessions}
+            </span>
+            <span className="flex items-center gap-1">
+              <SourceIcon source="cli" size={10} /> {SOURCE_LABELS.cli}{" "}
+              {counts.cli.sessions}
+            </span>
+            <span className="flex items-center gap-1">
+              <SourceIcon source="unified" size={10} /> {SOURCE_LABELS.unified}{" "}
+              {counts.unified.sessions}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex border-b border-[var(--border)]">
@@ -171,17 +169,23 @@ export function Sidebar({
         {ALL_SOURCES.map((source) => {
           const list = grouped[source];
           if (list.length === 0) return null;
+          // When non-unified sessions are hidden, there's only ever one
+          // source (unified) in play, so the group header is redundant —
+          // sessions are shown directly at the root.
+          const showGroupHeader = showNonUnified;
           return (
             <div key={source}>
-              <div className="flex items-center gap-1.5 px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">
-                <SourceIcon source={source} />
-                <span className={SOURCE_TEXT_CLASS[source]}>
-                  {SOURCE_LABELS[source]}
-                </span>
-                <span className="ml-auto text-[var(--text-secondary)]">
-                  {list.length}
-                </span>
-              </div>
+              {showGroupHeader && (
+                <div className="flex items-center gap-1.5 px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">
+                  <SourceIcon source={source} />
+                  <span className={SOURCE_TEXT_CLASS[source]}>
+                    {SOURCE_LABELS[source]}
+                  </span>
+                  <span className="ml-auto text-[var(--text-secondary)]">
+                    {list.length}
+                  </span>
+                </div>
+              )}
               <div className="space-y-0.5">
                 {list.map((ws) => (
                   <div key={ws.id}>
