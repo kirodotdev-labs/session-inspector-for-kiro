@@ -23,9 +23,9 @@ struct SessionScreen: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 HStack(spacing: 4) {
-                    Image(systemName: isCli ? "terminal" : "display")
+                    Image(systemName: session.source.iconName)
                         .font(.system(size: 9))
-                    Text(isCli ? "KIRO CLI" : "KIRO IDE")
+                    Text(session.source.displayName)
                         .font(.system(size: 10, weight: .semibold))
                         .tracking(0.8)
                 }
@@ -41,7 +41,9 @@ struct SessionScreen: View {
                         .stroke(Theme.color(for: session.source).opacity(0.3), lineWidth: 1)
                 )
 
-                if isCli, let v = session.cliVersion {
+                // Legacy CLI (v2) keeps its version tag. The v3 tag is retired:
+                // those sessions now surface as the "Unified" source instead.
+                if session.source == .cli, let v = session.cliVersion {
                     Text("v\(v)")
                         .font(.system(size: 10, weight: .semibold))
                         .tracking(0.8)
@@ -81,6 +83,9 @@ struct SessionScreen: View {
                 chip(icon: "gauge.with.dots.needle.bottom.50percent",
                      text: String(format: "%.1f%% context", session.contextUsage))
                 chip(icon: nil, text: "\(session.messageCount) messages")
+                if session.durationMs > 0 {
+                    chip(icon: "clock", text: formatDuration(session.durationMs))
+                }
                 if session.totalCost > 0 {
                     chip(icon: "dollarsign.circle",
                          text: String(format: "%.2f credits", session.totalCost))
@@ -165,16 +170,20 @@ private struct MessageBlock: View {
 
     private var background: Color {
         if message.role == "user" { return Theme.bgTertiary }
-        return source == .cli
-            ? Theme.cliAccent.opacity(0.06)
-            : Theme.bgSecondary
+        switch source {
+        case .cli: return Theme.cliAccent.opacity(0.06)
+        case .unified: return Theme.unifiedAccent.opacity(0.06)
+        case .ide: return Theme.bgSecondary
+        }
     }
 
     private var borderColor: Color {
-        if source == .cli && message.role != "user" {
-            return Theme.cliAccent.opacity(0.22)
+        guard message.role != "user" else { return Theme.border }
+        switch source {
+        case .cli: return Theme.cliAccent.opacity(0.22)
+        case .unified: return Theme.unifiedAccent.opacity(0.22)
+        case .ide: return Theme.border
         }
-        return Theme.border
     }
 }
 

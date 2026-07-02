@@ -1,13 +1,24 @@
 import SwiftUI
 
 enum SidebarSourceFilter: String, CaseIterable, Identifiable {
-    case all, ide, cli
+    case all, ide, cli, unified
     var id: String { rawValue }
     var title: String {
         switch self {
         case .all: return "All"
         case .ide: return "IDE"
         case .cli: return "CLI"
+        case .unified: return "Unified"
+        }
+    }
+
+    /// The source this filter selects, or nil for `.all`.
+    var source: SessionSource? {
+        switch self {
+        case .all: return nil
+        case .ide: return .ide
+        case .cli: return .cli
+        case .unified: return .unified
         }
     }
 }
@@ -21,12 +32,18 @@ struct SidebarView_: View {
     @State private var expanded: Set<String> = []
     @State private var sourceFilter: SidebarSourceFilter = .all
 
+    /// When false, only Unified (shared IDE+CLI) sessions are listed.
+    @AppStorage(AppSettings.showNonUnifiedKey) private var showNonUnified = true
+
     var body: some View {
         VStack(spacing: 0) {
             header
             tabs
-            filterBar
+            if showNonUnified {
+                filterBar
+            }
             list
+            footer
         }
         .frame(maxHeight: .infinity)
         .background(Theme.bgSecondary)
@@ -43,12 +60,15 @@ struct SidebarView_: View {
                 .font(.system(size: 12, weight: .semibold))
                 .tracking(1.0)
                 .foregroundStyle(Theme.accent)
-            Text("\(store.workspaces.count) workspaces • \(totalSessions) sessions")
+            Text("\(visibleWorkspaces.count) workspaces • \(visibleSessions) sessions")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textSecondary)
             HStack(spacing: 10) {
-                sourceCounter(source: .ide, sessions: counts(for: .ide).sessions)
-                sourceCounter(source: .cli, sessions: counts(for: .cli).sessions)
+                if showNonUnified {
+                    sourceCounter(source: .ide, sessions: counts(for: .ide).sessions)
+                    sourceCounter(source: .cli, sessions: counts(for: .cli).sessions)
+                }
+                sourceCounter(source: .unified, sessions: counts(for: .unified).sessions)
             }
             .padding(.top, 2)
         }
@@ -61,7 +81,7 @@ struct SidebarView_: View {
 
     private func sourceCounter(source: SessionSource, sessions: Int) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: source == .cli ? "terminal" : "display")
+            Image(systemName: source.iconName)
                 .font(.system(size: 9))
                 .foregroundStyle(Theme.color(for: source))
             Text("\(source.label) \(sessions)")
@@ -70,8 +90,8 @@ struct SidebarView_: View {
         }
     }
 
-    private var totalSessions: Int {
-        store.workspaces.reduce(0) { $0 + $1.sessionCount }
+    private var visibleSessions: Int {
+        visibleWorkspaces.reduce(0) { $0 + $1.sessionCount }
     }
 
     private func counts(for source: SessionSource) -> (workspaces: Int, sessions: Int) {
@@ -84,6 +104,7 @@ struct SidebarView_: View {
     private var tabs: some View {
         HStack(spacing: 0) {
             tabButton(title: "Dashboard", icon: "square.grid.2x2", tab: .dashboard)
+            tabButton(title: "Workspaces", icon: "square.stack.3d.up", tab: .workspaces)
             tabButton(title: "Sessions", icon: "list.bullet", tab: .sessions)
         }
         .overlay(alignment: .bottom) {
@@ -123,8 +144,9 @@ struct SidebarView_: View {
                     sourceFilter = f
                 } label: {
                     HStack(spacing: 4) {
-                        if f == .ide { Image(systemName: "display").font(.system(size: 9)) }
-                        if f == .cli { Image(systemName: "terminal").font(.system(size: 9)) }
+                        if let src = f.source {
+                            Image(systemName: src.iconName).font(.system(size: 9))
+                        }
                         Text(f.title).font(.system(size: 11))
                     }
                     .foregroundStyle(active ? Theme.textPrimary : Theme.textSecondary)
@@ -148,11 +170,15 @@ struct SidebarView_: View {
     // MARK: - Workspaces list
 
     private var visibleWorkspaces: [Workspace] {
-        switch sourceFilter {
-        case .all: return store.workspaces
-        case .ide: return store.workspaces.filter { $0.source == .ide }
-        case .cli: return store.workspaces.filter { $0.source == .cli }
+        var list = store.workspaces
+        if !showNonUnified {
+            // Setting overrides the source tabs: only Unified sessions are shown.
+            return list.filter { $0.source == .unified }
         }
+        if let src = sourceFilter.source {
+            list = list.filter { $0.source == src }
+        }
+        return list
     }
 
     private var list: some View {
@@ -185,7 +211,7 @@ struct SidebarView_: View {
 
     private func sectionHeader(for source: SessionSource, count: Int) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: source == .cli ? "terminal" : "display")
+            Image(systemName: source.iconName)
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.color(for: source))
             Text(source.label.uppercased())
@@ -213,7 +239,7 @@ struct SidebarView_: View {
                     .rotationEffect(expanded.contains(ws.id) ? .degrees(90) : .zero)
                     .animation(.easeInOut(duration: 0.15), value: expanded.contains(ws.id))
 
-                Image(systemName: ws.source == .cli ? "terminal.fill" : "folder.fill")
+                Image(systemName: workspaceIcon(for: ws.source))
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.color(for: ws.source))
 
@@ -254,14 +280,14 @@ struct SidebarView_: View {
     @ViewBuilder
     private func sessionRow(ws: Workspace, session: SessionSummary) -> some View {
         let selected = selectedSession?.sessionId == session.id
-        let selectedColor: Color = ws.source == .cli ? Theme.cliAccent : Theme.accent
+        let selectedColor: Color = Theme.color(for: ws.source)
         Button {
             onSelect(ws.id, session.id)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: ws.source == .cli ? "terminal" : "message")
+                Image(systemName: ws.source == .ide ? "message" : ws.source.iconName)
                     .font(.system(size: 11))
-                    .foregroundStyle(ws.source == .cli ? Theme.cliAccent : Theme.textSecondary)
+                    .foregroundStyle(ws.source == .ide ? Theme.textSecondary : Theme.color(for: ws.source))
                 Text(session.title.isEmpty ? "Untitled session" : session.title)
                     .font(.system(size: 12))
                     .lineLimit(1)
@@ -281,6 +307,14 @@ struct SidebarView_: View {
         .buttonStyle(HoverRowStyle())
     }
 
+    private func workspaceIcon(for source: SessionSource) -> String {
+        switch source {
+        case .ide: return "folder.fill"
+        case .cli: return "terminal.fill"
+        case .unified: return "arrow.triangle.merge"
+        }
+    }
+
     private func toggle(_ id: String) {
         if expanded.contains(id) {
             expanded.remove(id)
@@ -288,13 +322,28 @@ struct SidebarView_: View {
             expanded.insert(id)
         }
     }
-}
 
-extension SessionSource {
-    var label: String {
-        switch self {
-        case .ide: return "IDE"
-        case .cli: return "CLI"
+    // MARK: - Footer setting
+
+    private var footer: some View {
+        Toggle(isOn: $showNonUnified) {
+            HStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 10))
+                Text("Show non-unified sessions")
+                    .font(.system(size: 11))
+            }
+            .foregroundStyle(Theme.textSecondary)
+        }
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .tint(Theme.accent)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.bgSecondary)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Theme.border).frame(height: 1)
         }
     }
 }

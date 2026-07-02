@@ -8,8 +8,10 @@ import CryptoKit
 final class SessionsStore: ObservableObject {
     @Published var workspaces: [Workspace] = []
     @Published var dashboard: DashboardData?
+    @Published var unifiedDashboard: DashboardData?
     @Published var isLoadingWorkspaces = false
     @Published var isLoadingDashboard = false
+    @Published var isLoadingUnifiedDashboard = false
 
     private let fm = FileManager.default
 
@@ -99,39 +101,52 @@ final class SessionsStore: ObservableObject {
 
     // MARK: - CLI workspace scanning
 
-    /// CLI sessions are a flat directory of `{id}.json` + `{id}.jsonl` files.
-    /// We group them by `cwd` to form pseudo-workspaces.
+    /// CLI-family sessions live in two on-disk layouts:
+    /// - v2: a flat directory of `{id}.json` + `{id}.jsonl` files -> `.cli` source.
+    /// - v3: the shared "unified" format (also written by the new IDE) -> `.unified` source.
+    /// We group them by `(source, cwd)` to form pseudo-workspaces.
     private static nonisolated func scanCliWorkspaces(at cliDir: URL) -> [Workspace] {
         let metas = loadAllCliSessionMeta(at: cliDir)
 
-        var byCwd: [String: [CliSessionMeta]] = [:]
+        // Group by source + cwd so v2 (CLI) and v3 (Unified) never merge, even
+        // when they share a working directory.
+        var groups: [String: (source: SessionSource, cwd: String, metas: [CliSessionMeta])] = [:]
         for m in metas {
-            let key = m.cwd.isEmpty ? "(unknown)" : m.cwd
-            byCwd[key, default: []].append(m)
+            let source = cliMetaSource(m)
+            let cwd = m.cwd.isEmpty ? "(unknown)" : m.cwd
+            let key = "\(source.rawValue)|\(cwd)"
+            if var g = groups[key] {
+                g.metas.append(m)
+                groups[key] = g
+            } else {
+                groups[key] = (source, cwd, [m])
+            }
         }
 
         var results: [Workspace] = []
-        for (cwd, list) in byCwd {
+        for (_, group) in groups {
+            let cwd = group.cwd
+            let source = group.source
             let projectName = cwd.split(separator: "/").last.map(String.init) ?? cwd
             let encoded = Data(cwd.utf8).base64EncodedString()
                 .replacingOccurrences(of: "+", with: "-")
                 .replacingOccurrences(of: "/", with: "_")
                 .replacingOccurrences(of: "=", with: "")
 
-            let summaries = list
+            let summaries = group.metas
                 .sorted(by: { $0.updatedAt > $1.updatedAt })
                 .map {
                     SessionSummary(
                         id: $0.sessionId,
                         title: $0.title.isEmpty ? "Untitled" : $0.title,
                         date: $0.updatedAt > 0 ? $0.updatedAt : $0.createdAt,
-                        source: .cli
+                        source: source
                     )
                 }
 
             results.append(Workspace(
-                id: "cli:\(encoded)",
-                source: .cli,
+                id: "\(source.rawValue):\(encoded)",
+                source: source,
                 path: cwd,
                 name: projectName,
                 sessions: summaries
@@ -142,10 +157,18 @@ final class SessionsStore: ObservableObject {
         return results
     }
 
+    /// Maps a CLI-family session's on-disk format version to its UI source.
+    /// v3 is the shared format used by both the new IDE and CLI ("Unified").
+    private static nonisolated func cliMetaSource(_ meta: CliSessionMeta) -> SessionSource {
+        meta.version >= 3 ? .unified : .cli
+    }
+
     // MARK: - Session detail (dispatches to IDE vs CLI)
 
     func loadSessionDetail(workspaceId: String, sessionId: String) async -> SessionDetail? {
-        if workspaceId.hasPrefix("cli:") {
+        // Both legacy CLI (v2) and Unified (v3) sessions are parsed by the
+        // CLI-family loader, which locates the session by id across formats.
+        if workspaceId.hasPrefix("cli:") || workspaceId.hasPrefix("unified:") {
             return await loadCliSessionDetail(sessionId: sessionId)
         }
         return await loadIdeSessionDetail(
@@ -234,6 +257,17 @@ final class SessionsStore: ObservableObject {
 
         let totalCost = messages.reduce(0) { $0 + $1.cost }
 
+        // Active time: sum each turn's agent work (start → last emitted action),
+        // which excludes idle gaps where the user steps away between turns.
+        var seenExec = Set<String>()
+        var durationMs: Double = 0
+        for m in messages {
+            guard let eid = m.executionId, !seenExec.contains(eid),
+                  let exec = execMap[eid] else { continue }
+            seenExec.insert(eid)
+            durationMs += ideActiveMs(exec)
+        }
+
         return SessionDetail(
             id: json["sessionId"]?.stringValue ?? "",
             source: .ide,
@@ -247,6 +281,7 @@ final class SessionsStore: ObservableObject {
             workspacePath: json["workspaceDirectory"]?.stringValue ?? "",
             messageCount: messages.count,
             totalCost: totalCost,
+            durationMs: durationMs,
             history: messages
         )
     }
@@ -270,6 +305,18 @@ final class SessionsStore: ObservableObject {
     private static nonisolated func extractCost(from exec: JSONValue) -> Double {
         guard let summary = exec["usageSummary"]?.arrayValue else { return 0 }
         return summary.reduce(0.0) { $0 + ($1["usage"]?.doubleValue ?? 0) }
+    }
+
+    /// Active time for one IDE turn: execution start → last emitted agent action.
+    /// Uses `emittedAt` (not `endTime`) to skip abort gaps and long-running
+    /// background processes whose end timestamps land hours/days later.
+    private static nonisolated func ideActiveMs(_ exec: JSONValue) -> Double {
+        guard let st = exec["startTime"]?.doubleValue else { return 0 }
+        var lastEmit = st
+        for a in exec["actions"]?.arrayValue ?? [] {
+            if let e = a["emittedAt"]?.doubleValue, e > lastEmit { lastEmit = e }
+        }
+        return lastEmit > st ? lastEmit - st : 0
     }
 
     // MARK: - Execution file loading (IDE)
@@ -484,6 +531,7 @@ final class SessionsStore: ObservableObject {
             workspacePath: meta.cwd,
             messageCount: history.count,
             totalCost: meta.totalCost,
+            durationMs: max(0, meta.updatedAt - meta.createdAt),
             cliVersion: 2,
             history: history
         )
@@ -685,16 +733,17 @@ final class SessionsStore: ObservableObject {
 
         return SessionDetail(
             id: meta.sessionId,
-            source: .cli,
+            source: .unified,
             title: meta.title,
             model: meta.model,
             autonomyMode: meta.agentName,
-            sessionType: "cli",
+            sessionType: "unified",
             contextUsage: meta.contextUsage,
             workspacePath: meta.cwd,
             messageCount: history.count,
             totalCost: meta.totalCost,
-            cliVersion: 3,
+            durationMs: max(0, meta.updatedAt - meta.createdAt),
+            // No cliVersion tag: the "v3" tag is retired in favor of the Unified source.
             history: history
         )
     }
@@ -719,15 +768,55 @@ final class SessionsStore: ObservableObject {
         self.dashboard = result
     }
 
+    /// Builds a dashboard scoped to Unified (shared IDE+CLI format) sessions only.
+    func loadUnifiedDashboard() async {
+        isLoadingUnifiedDashboard = true
+        defer { isLoadingUnifiedDashboard = false }
+
+        let ideDir = sessionsDir
+        let storage = globalStorage
+        let cliDir = cliSessionsDir
+        let result = await Task.detached(priority: .userInitiated) { [ideDir, storage, cliDir] in
+            SessionsStore.buildDashboard(
+                sessionsDir: ideDir,
+                globalStorage: storage,
+                cliSessionsDir: cliDir,
+                sourceFilter: .unified
+            )
+        }.value
+
+        self.unifiedDashboard = result
+    }
+
+    /// Computes a dashboard scoped to a single workspace path.
+    /// Pass `sourceFilter: .unified` to restrict it to Unified sessions.
+    func workspaceDashboard(path: String, sourceFilter: SessionSource? = nil) async -> DashboardData {
+        let ideDir = sessionsDir
+        let storage = globalStorage
+        let cliDir = cliSessionsDir
+        return await Task.detached(priority: .userInitiated) { [ideDir, storage, cliDir, path, sourceFilter] in
+            SessionsStore.buildDashboard(
+                sessionsDir: ideDir,
+                globalStorage: storage,
+                cliSessionsDir: cliDir,
+                filterPath: path,
+                sourceFilter: sourceFilter
+            )
+        }.value
+    }
+
     private static nonisolated func buildDashboard(
         sessionsDir: URL,
         globalStorage: URL,
-        cliSessionsDir: URL
+        cliSessionsDir: URL,
+        filterPath: String? = nil,
+        sourceFilter: SessionSource? = nil
     ) -> DashboardData {
         let fm = FileManager.default
         var totalCost: Double = 0
         var totalSessions = 0
         var totalExecutions = 0
+        var totalDuration: Double = 0
         var daily: [String: DailyStats] = [:]
         var modelSessions: [String: Int] = [:]
         var sessionTypes: [String: Int] = [:]
@@ -736,6 +825,7 @@ final class SessionsStore: ObservableObject {
         var sourceStats: [SessionSource: SourceStats] = [
             .ide: SourceStats(sessions: 0, executions: 0, cost: 0),
             .cli: SourceStats(sessions: 0, executions: 0, cost: 0),
+            .unified: SourceStats(sessions: 0, executions: 0, cost: 0),
         ]
 
         let dayFormatter: (Double) -> String = { ms in
@@ -756,8 +846,11 @@ final class SessionsStore: ObservableObject {
         }
 
         // --- IDE ---
+        // Legacy IDE sessions are never Unified, so skip them entirely when the
+        // dashboard is scoped to a different source.
 
-        if let wsEntries = try? fm.contentsOfDirectory(
+        if (sourceFilter == nil || sourceFilter == .ide),
+           let wsEntries = try? fm.contentsOfDirectory(
             at: sessionsDir,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
@@ -773,9 +866,13 @@ final class SessionsStore: ObservableObject {
                       !sessions.isEmpty else { continue }
 
                 let decodedPath = decodeBase64URL(dirName)
+                if let fp = filterPath, decodedPath != fp { continue }
                 let projectName = decodedPath.split(separator: "/").last.map(String.init) ?? dirName
                 totalSessions += sessions.count
                 sourceStats[.ide]?.sessions += sessions.count
+
+                // Active time accumulator: sum of per-execution active time.
+                var wsDuration: Double = 0
 
                 // Per-session model/type/mode
                 for s in sessions {
@@ -838,6 +935,9 @@ final class SessionsStore: ObservableObject {
                             totalCost += cost
                             sourceStats[.ide]?.cost += cost
 
+                            // Active turn time: start → last emitted agent action.
+                            wsDuration += ideActiveMs(json)
+
                             let startTime = json["startTime"]?.doubleValue ?? 0
                             let key = dayFormatter(startTime)
                             var stats = daily[key] ?? blankStats(key)
@@ -850,59 +950,82 @@ final class SessionsStore: ObservableObject {
                     }
                 }
 
+                let wsDurationFinal = wsDuration
+                totalDuration += wsDurationFinal
+
                 workspaces["ide:\(projectName)"] = WorkspaceStats(
                     name: projectName,
                     source: .ide,
                     cost: wsCost,
                     sessions: sessions.count,
-                    executions: wsExecs
+                    executions: wsExecs,
+                    duration: wsDurationFinal
                 )
             }
         }
 
-        // --- CLI ---
+        // --- CLI-family (legacy CLI v2 -> .cli, shared v3 format -> .unified) ---
 
         let cliMetas = loadAllCliSessionMeta(at: cliSessionsDir)
-        var cliAgg: [String: (cost: Double, sessions: Int, executions: Int)] = [:]
+        // Aggregated per (source, workspace name).
+        var cliAgg: [String: (source: SessionSource, name: String, cost: Double, sessions: Int, executions: Int, duration: Double)] = [:]
         for s in cliMetas {
+            if let fp = filterPath, s.cwd != fp { continue }
+            let source = cliMetaSource(s)
+            if let sf = sourceFilter, sf != source { continue }
+
             totalSessions += 1
-            sourceStats[.cli]?.sessions += 1
+            sourceStats[source]?.sessions += 1
             modelSessions[s.model, default: 0] += 1
-            sessionTypes["cli", default: 0] += 1
+            sessionTypes[source == .unified ? "unified" : "cli", default: 0] += 1
             autonomyModes[s.agentName, default: 0] += 1
 
             totalExecutions += s.turnCount
-            sourceStats[.cli]?.executions += s.turnCount
+            sourceStats[source]?.executions += s.turnCount
             totalCost += s.totalCost
-            sourceStats[.cli]?.cost += s.totalCost
+            sourceStats[source]?.cost += s.totalCost
 
             let createdKey = dayFormatter(s.createdAt > 0 ? s.createdAt : s.updatedAt)
             var createdStats = daily[createdKey] ?? blankStats(createdKey)
             createdStats.sessions += 1
-            createdStats.cliSessions += 1
+            if source == .unified {
+                createdStats.unifiedSessions += 1
+            } else {
+                createdStats.cliSessions += 1
+            }
             daily[createdKey] = createdStats
 
             let updatedKey = dayFormatter(s.updatedAt > 0 ? s.updatedAt : s.createdAt)
             var stats = daily[updatedKey] ?? blankStats(updatedKey)
             stats.cost += s.totalCost
             stats.executions += s.turnCount
-            stats.cliCost += s.totalCost
-            stats.cliExecutions += s.turnCount
+            if source == .unified {
+                stats.unifiedCost += s.totalCost
+                stats.unifiedExecutions += s.turnCount
+            } else {
+                stats.cliCost += s.totalCost
+                stats.cliExecutions += s.turnCount
+            }
             daily[updatedKey] = stats
 
             let projectName = s.cwd.split(separator: "/").last.map(String.init)
                 ?? (s.cwd.isEmpty ? "(unknown)" : s.cwd)
-            var agg = cliAgg[projectName] ?? (0, 0, 0)
+            let dur = max(0, s.updatedAt - s.createdAt)
+            totalDuration += dur
+            let aggKey = "\(source.rawValue)|\(projectName)"
+            var agg = cliAgg[aggKey] ?? (source, projectName, 0, 0, 0, 0)
             agg.cost += s.totalCost
             agg.sessions += 1
             agg.executions += s.turnCount
-            cliAgg[projectName] = agg
+            agg.duration += dur
+            cliAgg[aggKey] = agg
         }
 
-        for (name, agg) in cliAgg {
-            workspaces["cli:\(name)"] = WorkspaceStats(
-                name: name, source: .cli,
-                cost: agg.cost, sessions: agg.sessions, executions: agg.executions
+        for (_, agg) in cliAgg {
+            workspaces["\(agg.source.rawValue):\(agg.name)"] = WorkspaceStats(
+                name: agg.name, source: agg.source,
+                cost: agg.cost, sessions: agg.sessions, executions: agg.executions,
+                duration: agg.duration
             )
         }
 
@@ -913,6 +1036,7 @@ final class SessionsStore: ObservableObject {
             totalCost: totalCost,
             totalSessions: totalSessions,
             totalExecutions: totalExecutions,
+            totalDuration: totalDuration,
             daily: sortedDaily,
             modelSessions: modelSessions,
             sessionTypes: sessionTypes,

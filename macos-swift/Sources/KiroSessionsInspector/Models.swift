@@ -1,10 +1,71 @@
 import Foundation
 
-// MARK: - Source (IDE vs CLI)
+// MARK: - App settings
 
+/// Centralized keys for `@AppStorage`-backed user preferences.
+enum AppSettings {
+    /// When false, IDE and legacy CLI (v2) sessions are hidden from the
+    /// browsing surfaces, leaving only Unified (shared format) sessions.
+    static let showNonUnifiedKey = "showNonUnifiedSessions"
+}
+
+// MARK: - Source (IDE / CLI / Unified)
+
+/// Where a session came from.
+/// - `ide`:     legacy Kiro IDE sessions (workspace-sessions storage).
+/// - `cli`:     legacy Kiro CLI v2 sessions (flat `~/.kiro/sessions/cli` files).
+/// - `unified`: the shared format used by both the new IDE and CLI (formerly
+///              "CLI v3"). Going forward IDE and CLI write this same format.
 enum SessionSource: String, Codable, Hashable, CaseIterable {
     case ide
     case cli
+    case unified
+}
+
+extension SessionSource {
+    /// Short label used for filters, counters, and legends.
+    var label: String {
+        switch self {
+        case .ide: return "IDE"
+        case .cli: return "CLI"
+        case .unified: return "Unified"
+        }
+    }
+
+    /// SF Symbol representing the source.
+    var iconName: String {
+        switch self {
+        case .ide: return "display"
+        case .cli: return "terminal"
+        case .unified: return "arrow.triangle.merge"
+        }
+    }
+
+    /// Full display name used in headers and cards.
+    var displayName: String {
+        switch self {
+        case .ide: return "KIRO IDE"
+        case .cli: return "KIRO CLI"
+        case .unified: return "KIRO UNIFIED"
+        }
+    }
+
+    /// True for the shared/unified format (new IDE + CLI).
+    var isUnified: Bool { self == .unified }
+}
+
+/// Format a millisecond duration as a compact human string (e.g. "2h 14m", "45m 12s", "1d 3h").
+func formatDuration(_ ms: Double) -> String {
+    guard ms > 0 else { return "0m" }
+    let totalSec = Int(ms / 1000)
+    let days = totalSec / 86400
+    let hours = (totalSec % 86400) / 3600
+    let minutes = (totalSec % 3600) / 60
+    let seconds = totalSec % 60
+    if days > 0 { return "\(days)d \(hours)h" }
+    if hours > 0 { return "\(hours)h \(minutes)m" }
+    if minutes > 0 { return "\(minutes)m \(seconds)s" }
+    return "\(seconds)s"
 }
 
 // MARK: - View models exposed to the UI
@@ -37,6 +98,8 @@ struct SessionDetail: Identifiable {
     let workspacePath: String
     let messageCount: Int
     let totalCost: Double
+    /// Wall-clock duration from session start to last activity, in ms.
+    var durationMs: Double = 0
     /// CLI session format version (2 or 3); nil for IDE sessions.
     var cliVersion: Int? = nil
     let history: [HistoryMessage]
@@ -66,6 +129,7 @@ struct DashboardData {
     var totalCost: Double
     var totalSessions: Int
     var totalExecutions: Int
+    var totalDuration: Double
     var daily: [DailyStats]
     var modelSessions: [String: Int]
     var sessionTypes: [String: Int]
@@ -92,6 +156,28 @@ struct DailyStats: Identifiable {
     var cliCost: Double
     var ideExecutions: Int
     var cliExecutions: Int
+    // Unified (shared IDE+CLI format). Defaulted so existing initializers still compile.
+    var unifiedSessions: Int = 0
+    var unifiedCost: Double = 0
+    var unifiedExecutions: Int = 0
+
+    /// Per-source credit spend for this day.
+    func cost(for source: SessionSource) -> Double {
+        switch source {
+        case .ide: return ideCost
+        case .cli: return cliCost
+        case .unified: return unifiedCost
+        }
+    }
+
+    /// Per-source execution count for this day.
+    func executions(for source: SessionSource) -> Int {
+        switch source {
+        case .ide: return ideExecutions
+        case .cli: return cliExecutions
+        case .unified: return unifiedExecutions
+        }
+    }
 }
 
 struct WorkspaceStats: Identifiable {
@@ -101,6 +187,7 @@ struct WorkspaceStats: Identifiable {
     let cost: Double
     let sessions: Int
     let executions: Int
+    var duration: Double = 0
 }
 
 // MARK: - JSONValue: loosely-typed JSON for heterogeneous payloads

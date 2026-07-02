@@ -4,6 +4,9 @@ import Charts
 struct DashboardScreen: View {
     @EnvironmentObject private var store: SessionsStore
 
+    /// When false, the dashboard summarizes only Unified sessions.
+    @AppStorage(AppSettings.showNonUnifiedKey) private var showNonUnified = true
+
     var body: some View {
         ScrollView {
             content
@@ -11,28 +14,79 @@ struct DashboardScreen: View {
                 .frame(maxWidth: 960, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .top)
         }
-        .task {
-            if store.dashboard == nil { await store.loadDashboard() }
-        }
+        .task(id: showNonUnified) { await loadIfNeeded() }
     }
 
     @ViewBuilder
     private var content: some View {
-        if store.isLoadingDashboard {
+        if showNonUnified {
+            dashboardBody(
+                data: store.dashboard,
+                loading: store.isLoadingDashboard,
+                title: "Usage Dashboard"
+            )
+        } else {
+            dashboardBody(
+                data: store.unifiedDashboard,
+                loading: store.isLoadingUnifiedDashboard,
+                title: "Unified Dashboard",
+                emptyHint: "No unified sessions yet. Going forward, IDE and CLI both write the unified format."
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func dashboardBody(
+        data: DashboardData?,
+        loading: Bool,
+        title: String,
+        emptyHint: String? = nil
+    ) -> some View {
+        if loading && data == nil {
             Text("Loading dashboard...")
                 .foregroundStyle(Theme.textSecondary)
-        } else if let data = store.dashboard {
-            dashboard(data)
+        } else if let data {
+            if data.totalSessions == 0, let emptyHint {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(title)
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(emptyHint)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            } else {
+                DashboardContentView(data: data, title: title)
+            }
         } else {
             Text("Failed to load dashboard")
                 .foregroundStyle(Theme.textSecondary)
         }
     }
 
+    private func loadIfNeeded() async {
+        if showNonUnified {
+            if store.dashboard == nil { await store.loadDashboard() }
+        } else {
+            if store.unifiedDashboard == nil { await store.loadUnifiedDashboard() }
+        }
+    }
+}
+
+/// Renders the dashboard charts/cards from a `DashboardData`. Used by both the
+/// global `DashboardScreen` and the per-workspace dashboard.
+struct DashboardContentView: View {
+    let data: DashboardData
+    var title: String = "Usage Dashboard"
+
+    var body: some View {
+        dashboard(data)
+    }
+
     @ViewBuilder
     private func dashboard(_ data: DashboardData) -> some View {
         VStack(alignment: .leading, spacing: 24) {
-            Text("Usage Dashboard")
+            Text(title)
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(Theme.textPrimary)
 
@@ -44,31 +98,34 @@ struct DashboardScreen: View {
                          value: "\(data.totalSessions)")
                 StatCard(icon: "bolt", label: "Executions",
                          value: "\(data.totalExecutions)")
+                StatCard(icon: "clock", label: "Total Time",
+                         value: formatDuration(data.totalDuration))
                 StatCard(icon: "chart.line.uptrend.xyaxis", label: "Avg/Session",
                          value: String(format: "%.2f", data.totalCost / Double(max(data.totalSessions, 1))))
             }
 
-            // Source breakdown (IDE vs CLI)
-            HStack(spacing: 16) {
-                SourceCard(
-                    source: .ide,
-                    stats: data.sourceStats[.ide] ?? SourceStats(sessions: 0, executions: 0, cost: 0),
-                    totalSessions: data.totalSessions,
-                    totalCost: data.totalCost
-                )
-                SourceCard(
-                    source: .cli,
-                    stats: data.sourceStats[.cli] ?? SourceStats(sessions: 0, executions: 0, cost: 0),
-                    totalSessions: data.totalSessions,
-                    totalCost: data.totalCost
-                )
+            // Source breakdown (IDE / CLI / Unified) — only sources with sessions.
+            let presentSources = SessionSource.allCases.filter {
+                (data.sourceStats[$0]?.sessions ?? 0) > 0
+            }
+            if !presentSources.isEmpty {
+                HStack(spacing: 16) {
+                    ForEach(presentSources, id: \.self) { src in
+                        SourceCard(
+                            source: src,
+                            stats: data.sourceStats[src] ?? SourceStats(sessions: 0, executions: 0, cost: 0),
+                            totalSessions: data.totalSessions,
+                            totalCost: data.totalCost
+                        )
+                    }
+                }
             }
 
             // Daily activity (last 30 days)
-            DailyActivityCard(data: last30Days(from: data))
+            DailyActivityCard(data: last30Days(from: data), sources: chartSources)
 
             // Weekly spend
-            WeeklySpendCard(weeks: weeks(from: data))
+            WeeklySpendCard(weeks: weeks(from: data), sources: chartSources)
 
             // Breakdown row
             HStack(alignment: .top, spacing: 16) {
@@ -78,9 +135,10 @@ struct DashboardScreen: View {
                     total: data.totalSessions
                 ) { key in
                     switch key {
-                    case "spec": return Theme.blue
-                    case "cli":  return Theme.cliAccent
-                    default:     return Theme.purple
+                    case "spec":    return Theme.blue
+                    case "cli":     return Theme.cliAccent
+                    case "unified": return Theme.unifiedAccent
+                    default:        return Theme.purple
                     }
                 }
 
@@ -107,6 +165,14 @@ struct DashboardScreen: View {
     }
 
     // MARK: - Helpers
+
+    /// Sources that have any spend across the period, in a stable order.
+    private var chartSources: [SessionSource] {
+        SessionSource.allCases.filter { src in
+            data.daily.contains { $0.cost(for: src) > 0 }
+                || (data.sourceStats[src]?.cost ?? 0) > 0
+        }
+    }
 
     private func sortedCounts(_ map: [String: Int]) -> [(key: String, value: Int)] {
         map.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
@@ -147,13 +213,14 @@ struct DashboardScreen: View {
             guard let weekStart = cal.date(byAdding: .day, value: -daysFromSunday, to: date) else { continue }
             let key = formatter.string(from: weekStart)
             var existing = map[key] ?? WeeklyStats(
-                week: key, cost: 0, sessions: 0, executions: 0, ideCost: 0, cliCost: 0
+                week: key, cost: 0, sessions: 0, executions: 0, costBySource: [:]
             )
             existing.cost += d.cost
             existing.sessions += d.sessions
             existing.executions += d.executions
-            existing.ideCost += d.ideCost
-            existing.cliCost += d.cliCost
+            for src in SessionSource.allCases {
+                existing.costBySource[src, default: 0] += d.cost(for: src)
+            }
             map[key] = existing
         }
         return map.values.sorted { $0.week < $1.week }
@@ -168,17 +235,21 @@ struct WeeklyStats: Identifiable {
     var cost: Double
     var sessions: Int
     var executions: Int
-    var ideCost: Double
-    var cliCost: Double
+    var costBySource: [SessionSource: Double]
+
+    func cost(for source: SessionSource) -> Double { costBySource[source] ?? 0 }
 }
 
 // MARK: - Legend
 
 private struct SourceLegend: View {
+    var sources: [SessionSource] = [.ide, .cli, .unified]
+
     var body: some View {
         HStack(spacing: 12) {
-            legendItem(color: Theme.accent, label: "IDE")
-            legendItem(color: Theme.cliAccent, label: "CLI")
+            ForEach(sources, id: \.self) { src in
+                legendItem(color: Theme.color(for: src), label: src.label)
+            }
         }
     }
 
@@ -236,9 +307,9 @@ private struct SourceCard: View {
 
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-                Image(systemName: source == .cli ? "terminal" : "display")
+                Image(systemName: source.iconName)
                     .font(.system(size: 12))
-                Text(source == .cli ? "KIRO CLI" : "KIRO IDE")
+                Text(source.displayName)
                     .font(.system(size: 11, weight: .semibold))
                     .tracking(0.8)
             }
@@ -296,28 +367,34 @@ private struct DailyBar: Identifiable {
 
 private struct DailyActivityCard: View {
     let data: [DailyStats]
+    var sources: [SessionSource] = [.ide, .cli, .unified]
 
     /// One bar entry per day per source (only emit non-zero segments).
     private var bars: [DailyBar] {
         var result: [DailyBar] = []
-        result.reserveCapacity(data.count * 2)
+        result.reserveCapacity(data.count * sources.count)
         for day in data {
             guard let d = Self.parseDay(day.date) else { continue }
-            // Emit IDE first so it renders on top of CLI in the stack, matching legend order.
-            if day.cliCost > 0 {
+            for source in sources {
+                let c = day.cost(for: source)
+                guard c > 0 else { continue }
                 result.append(DailyBar(
-                    id: "\(day.date):cli", date: d, dateKey: day.date,
-                    source: .cli, cost: day.cliCost
-                ))
-            }
-            if day.ideCost > 0 {
-                result.append(DailyBar(
-                    id: "\(day.date):ide", date: d, dateKey: day.date,
-                    source: .ide, cost: day.ideCost
+                    id: "\(day.date):\(source.rawValue)", date: d, dateKey: day.date,
+                    source: source, cost: c
                 ))
             }
         }
         return result
+    }
+
+    /// Foreground style scale mapping each visible source label to its color.
+    private var styleScale: KeyValuePairs<String, Color> {
+        // KeyValuePairs can't be built dynamically, so cover all known sources.
+        [
+            SessionSource.ide.label: Theme.color(for: .ide),
+            SessionSource.cli.label: Theme.color(for: .cli),
+            SessionSource.unified.label: Theme.color(for: .unified),
+        ]
     }
 
     private var domain: ClosedRange<Date>? {
@@ -342,7 +419,7 @@ private struct DailyActivityCard: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Theme.textSecondary)
                 Spacer()
-                SourceLegend()
+                SourceLegend(sources: sources)
             }
 
             Chart(bars) { bar in
@@ -356,10 +433,7 @@ private struct DailyActivityCard: View {
                     format: "%@ %.2f credits", bar.source.label, bar.cost
                 )))
             }
-            .chartForegroundStyleScale([
-                SessionSource.ide.label: Theme.accent,
-                SessionSource.cli.label: Theme.cliAccent,
-            ])
+            .chartForegroundStyleScale(styleScale)
             .chartLegend(.hidden)
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day)) { _ in
@@ -426,7 +500,7 @@ private struct DailyActivityCard: View {
                 .position(x: cursorX, y: plot.midY)
 
             // Tooltip card, centered above the bar and clamped inside the chart.
-            TooltipCard(stats: stats)
+            TooltipCard(stats: stats, sources: sources)
                 .fixedSize()
                 .modifier(TooltipPositioner(
                     cursorX: cursorX,
@@ -509,16 +583,23 @@ private struct TooltipSizeKey: PreferenceKey {
 
 private struct TooltipCard: View {
     let stats: DailyStats
+    var sources: [SessionSource] = [.ide, .cli, .unified]
+
+    /// Sources with any activity on this day (fallback to all if none nonzero).
+    private var visibleSources: [SessionSource] {
+        let active = sources.filter { stats.cost(for: $0) > 0 || stats.executions(for: $0) > 0 }
+        return active.isEmpty ? sources : active
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(formattedDate)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-            row(color: Theme.accent, label: "IDE",
-                credits: stats.ideCost, execs: stats.ideExecutions)
-            row(color: Theme.cliAccent, label: "CLI",
-                credits: stats.cliCost, execs: stats.cliExecutions)
+            ForEach(visibleSources, id: \.self) { src in
+                row(color: Theme.color(for: src), label: src.label,
+                    credits: stats.cost(for: src), execs: stats.executions(for: src))
+            }
             Divider().background(Theme.border)
             HStack(spacing: 6) {
                 Text("Total")
@@ -573,6 +654,7 @@ private struct TooltipCard: View {
 
 private struct WeeklySpendCard: View {
     let weeks: [WeeklyStats]
+    var sources: [SessionSource] = [.ide, .cli, .unified]
 
     var body: some View {
         let recent = Array(weeks.suffix(8))
@@ -584,7 +666,7 @@ private struct WeeklySpendCard: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Theme.textSecondary)
                 Spacer()
-                SourceLegend()
+                SourceLegend(sources: sources)
             }
 
             VStack(spacing: 4) {
@@ -597,22 +679,19 @@ private struct WeeklySpendCard: View {
 
                         GeometryReader { geo in
                             let totalWidth = geo.size.width * CGFloat(w.cost / maxCost)
-                            let ideWidth = w.cost > 0
-                                ? totalWidth * CGFloat(w.ideCost / w.cost)
-                                : 0
-                            let cliWidth = max(0, totalWidth - ideWidth)
 
                             ZStack(alignment: .leading) {
                                 Rectangle().fill(Theme.bgTertiary)
                                 HStack(spacing: 0) {
-                                    Rectangle()
-                                        .fill(Theme.accent.opacity(0.85))
-                                        .frame(width: ideWidth)
-                                        .help(String(format: "IDE %.2f cr", w.ideCost))
-                                    Rectangle()
-                                        .fill(Theme.cliAccent.opacity(0.85))
-                                        .frame(width: cliWidth)
-                                        .help(String(format: "CLI %.2f cr", w.cliCost))
+                                    ForEach(sources, id: \.self) { src in
+                                        let width = w.cost > 0
+                                            ? totalWidth * CGFloat(w.cost(for: src) / w.cost)
+                                            : 0
+                                        Rectangle()
+                                            .fill(Theme.color(for: src).opacity(0.85))
+                                            .frame(width: width)
+                                            .help(String(format: "%@ %.2f cr", src.label, w.cost(for: src)))
+                                    }
                                 }
                             }
                             .clipShape(RoundedRectangle(cornerRadius: 2))
@@ -696,10 +775,10 @@ private struct WorkspacesCard: View {
             VStack(spacing: 6) {
                 ForEach(workspaces) { ws in
                     HStack(spacing: 12) {
-                        Image(systemName: ws.source == .cli ? "terminal" : "folder")
+                        Image(systemName: ws.source == .ide ? "folder" : ws.source.iconName)
                             .font(.system(size: 11))
                             .foregroundStyle(
-                                ws.source == .cli ? Theme.cliAccent : Theme.textSecondary
+                                ws.source == .ide ? Theme.textSecondary : Theme.color(for: ws.source)
                             )
                         Text(ws.name)
                             .font(.system(size: 13))
@@ -716,6 +795,13 @@ private struct WorkspacesCard: View {
                         Text("\(ws.executions) execs")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.textSecondary)
+                        HStack(spacing: 3) {
+                            Image(systemName: "clock").font(.system(size: 10))
+                            Text(formatDuration(ws.duration))
+                        }
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 76, alignment: .trailing)
                         Text(String(format: "%.1f cr", ws.cost))
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Theme.textPrimary)

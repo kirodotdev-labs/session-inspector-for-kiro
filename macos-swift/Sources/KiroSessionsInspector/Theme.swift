@@ -20,13 +20,17 @@ enum Theme {
     static let pink   = Color(red: 0.976, green: 0.447, blue: 0.761)
     static let red    = Color(red: 0.933, green: 0.333, blue: 0.333)
 
-    /// Emerald tint used to mark Kiro CLI sessions.
+    /// Emerald tint used to mark legacy Kiro CLI (v2) sessions.
     static let cliAccent = Color(red: 0.063, green: 0.725, blue: 0.506) // #10b981
+
+    /// Violet tint used to mark Unified (shared IDE+CLI) sessions.
+    static let unifiedAccent = Color(red: 0.659, green: 0.361, blue: 0.965) // #a85cf6
 
     static func color(for source: SessionSource) -> Color {
         switch source {
         case .ide: return accent
         case .cli: return cliAccent
+        case .unified: return unifiedAccent
         }
     }
 }

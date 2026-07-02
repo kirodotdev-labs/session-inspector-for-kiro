@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SidebarView: String, CaseIterable {
-    case dashboard, sessions
+    case dashboard, workspaces, sessions
 }
 
 struct SelectedSession: Hashable {
@@ -43,6 +43,11 @@ struct ContentView: View {
         switch view {
         case .dashboard:
             DashboardScreen()
+        case .workspaces:
+            WorkspacesScreen(onSelectSession: { ws, session in
+                selectedSession = SelectedSession(workspaceId: ws, sessionId: session)
+                view = .sessions
+            })
         case .sessions:
             if isLoadingSession {
                 placeholder("Loading session...")
