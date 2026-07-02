@@ -13,6 +13,7 @@ import type { Workspace, View } from "../App";
 import type { Source } from "../lib/source";
 import { ALL_SOURCES, SOURCE_LABELS, SOURCE_TEXT_CLASS } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
+import { Toggle } from "./Toggle";
 import { useSettings } from "../lib/useSettings";
 
 interface Props {
@@ -253,16 +254,15 @@ export function Sidebar({
         )}
       </div>
 
-      <label className="flex items-center gap-2 px-3 py-2.5 border-t border-[var(--border)] bg-[var(--bg-secondary)] text-xs text-[var(--text-secondary)] cursor-pointer">
+      <div className="flex items-center gap-2 px-3 py-2.5 border-t border-[var(--border)] bg-[var(--bg-secondary)] text-xs text-[var(--text-secondary)]">
         <SlidersHorizontal size={11} />
         <span className="flex-1">Show non-unified sessions</span>
-        <input
-          type="checkbox"
+        <Toggle
           checked={showNonUnified}
-          onChange={(e) => setShowNonUnified(e.target.checked)}
-          className="accent-[var(--accent)]"
+          onChange={setShowNonUnified}
+          label="Show non-unified sessions"
         />
-      </label>
+      </div>
     </aside>
   );
 }
