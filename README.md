@@ -1,13 +1,14 @@
 # Kiro Sessions Inspector
 
 Inspect the sessions and tool executions recorded by the Kiro IDE directly
-from your local Application Support folder. Two front-ends are shipped in
+from your local Application Support folder. The app ships in two forms from
 this repo:
 
-- **Web** — React + Vite app with a small Express backend that reads the
-  session JSON files. Runs in a browser.
-- **macOS native** — SwiftUI port of the same UI, packaged as a `.app`
-  bundle with its own Dock icon. No server required.
+- **Desktop (Tauri)** — the React UI wrapped in a native shell for macOS,
+  Windows, and Linux. No server required; session data is read directly
+  from disk via Rust commands.
+- **Web** — the same React + Vite UI with a small Express backend that reads
+  the session JSON files. Runs in a browser.
 
 Both read the same on-disk format documented in
 [`KIRO_SESSION_FORMAT.md`](KIRO_SESSION_FORMAT.md).
@@ -86,21 +87,58 @@ rules. Prettier is not currently wired up.
 
 ---
 
-## macOS native version (SwiftUI)
+## Desktop version (Tauri)
 
-A fully offline port with no Express backend — the Swift app reads the
-same JSON files and hashed workspace directories directly.
+A fully offline native app — no Express backend. The Rust side
+(`src-tauri/src/sessions/`) reads the same JSON files and hashed workspace
+directories directly, mirroring `server/index.ts`.
 
-See [`macos-swift/README.md`](macos-swift/README.md) for the quick start,
-[`macos-swift/HOMEBREW.md`](macos-swift/HOMEBREW.md) for Homebrew install,
-and [`macos-swift/DISTRIBUTION.md`](macos-swift/DISTRIBUTION.md) for
-building a shareable `.dmg` or `.zip`.
+### Requirements
+
+- Everything the web version needs (Node 20+, pnpm)
+- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
+- Platform-specific Tauri prerequisites — see the
+  [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/)
+  (Xcode Command Line Tools on macOS, WebView2 on Windows — usually
+  preinstalled on Windows 11 — and `libwebkit2gtk`/`libappindicator3`/etc.
+  on Linux)
+
+### Dev run
 
 ```bash
-cd macos-swift
-swift run                 # dev run
-make dmg                  # release .dmg in .build/dist/
+pnpm install
+pnpm tauri dev
 ```
+
+### Build an installer for your current OS
+
+```bash
+pnpm tauri build
+```
+
+Produces a native installer under `src-tauri/target/release/bundle/`:
+`.app`/`.dmg` on macOS, `.msi`/`.exe` (NSIS) on Windows, `.deb`/`.AppImage`/
+`.rpm` on Linux. Tauri only cross-bundles for the OS it's running on, so
+building all three platforms' installers requires running `tauri build` on
+each OS (see the CI workflow below for how this repo automates that).
+
+### Cross-platform releases via CI
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds
+macOS (arm64 + x64), Windows (x64), and Linux (x64) installers in parallel
+using [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action)
+and attaches them as draft assets on a GitHub Release. Trigger it by pushing
+a tag or running it manually:
+
+```bash
+git tag app-v0.2.0
+git push --tags
+```
+
+or from the Actions tab, run "Release desktop app" via `workflow_dispatch`.
+None of the builds are code-signed/notarized (macOS is ad-hoc signed,
+Windows/Linux are unsigned) — see the generated release notes for the
+first-run workaround on each OS.
 
 ---
 

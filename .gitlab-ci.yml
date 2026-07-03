@@ -1,0 +1,194 @@
+# GitLab CI/CD pipeline to build and release the Tauri desktop app.
+#
+# Trigger a release by pushing a tag that matches `app-v*`, e.g.:
+#   git tag app-v0.1.0 && git push origin app-v0.1.0
+#
+# The pipeline builds the Tauri app for:
+#   - macOS  (Apple Silicon arm64 + Intel x64)
+#   - Windows (x64)
+#   - Linux  (x64: .AppImage + .deb)
+#
+# Each build uploads its installers to the project's generic Package Registry,
+# and the final `release` job creates a GitLab Release that links to them.
+#
+# Runner requirements (GitLab.com SaaS runners used via `tags`):
+#   - macOS:   saas-macos-medium-m1
+#   - Windows: saas-windows-medium-amd64
+#   - Linux:   default shared Docker runners
+# Self-managed runners can be substituted by adjusting the `tags:`.
+
+stages:
+  - build
+  - release
+
+variables:
+  PACKAGE_REGISTRY_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/kiro-sessions-inspector"
+
+# Only run these jobs for `app-v*` tag pipelines.
+.release_rules: &release_rules
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^app-v/'
+
+# ---------------------------------------------------------------------------
+# Linux build (Docker)
+# ---------------------------------------------------------------------------
+build:linux:
+  <<: *release_rules
+  stage: build
+  image: rust:1-bookworm
+  variables:
+    VERSION: "0.0.0"
+  before_script:
+    - export VERSION="${CI_COMMIT_TAG#app-v}"
+    - apt-get update
+    - apt-get install -y --no-install-recommends
+        libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev
+        patchelf xdg-utils file curl ca-certificates
+    # Install Node.js 20 + pnpm
+    - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    - apt-get install -y nodejs
+    - corepack enable
+    - corepack prepare pnpm@10 --activate
+  script:
+    - pnpm install --frozen-lockfile
+    - pnpm exec tauri build
+    - mkdir -p assets
+    - |
+      # Iterate null-delimited so filenames with spaces (from productName) are safe.
+      find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' \) -print0 |
+      while IFS= read -r -d '' f; do
+        fname=$(basename "$f")
+        # The generic package registry only allows [A-Za-z0-9._-+] in file names.
+        upload_name=$(printf '%s' "$fname" | tr ' ' '-')
+        url="${PACKAGE_REGISTRY_URL}/${VERSION}/${upload_name}"
+        echo "Uploading ${fname} as ${upload_name}"
+        curl --fail --silent --show-error \
+          --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$f" "$url"
+        printf '{"name":"%s","url":"%s"}\n' "$fname" "$url" >> assets/linux.jsonl
+      done
+  artifacts:
+    paths:
+      - assets/linux.jsonl
+    expire_in: 1 week
+
+# ---------------------------------------------------------------------------
+# macOS build (Apple Silicon runner builds both arm64 and x64 targets)
+# ---------------------------------------------------------------------------
+build:macos:
+  <<: *release_rules
+  stage: build
+  tags:
+    - saas-macos-medium-m1
+  image: macos-14-xcode-15
+  parallel:
+    matrix:
+      - TARGET: aarch64-apple-darwin
+      - TARGET: x86_64-apple-darwin
+  before_script:
+    - export VERSION="${CI_COMMIT_TAG#app-v}"
+    # Node + pnpm
+    - brew install node@20 || true
+    - corepack enable
+    - corepack prepare pnpm@10 --activate
+    # Rust toolchain
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    - source "$HOME/.cargo/env"
+    - rustup target add "$TARGET"
+  script:
+    - source "$HOME/.cargo/env"
+    - pnpm install --frozen-lockfile
+    - pnpm exec tauri build --target "$TARGET"
+    - mkdir -p assets
+    - |
+      # Iterate null-delimited so filenames with spaces (from productName) are safe.
+      find "src-tauri/target/${TARGET}/release/bundle" -type f \( -name '*.dmg' -o -name '*.app.tar.gz' \) -print0 |
+      while IFS= read -r -d '' f; do
+        fname=$(basename "$f")
+        # The generic package registry only allows [A-Za-z0-9._-+] in file names.
+        upload_name=$(printf '%s' "$fname" | tr ' ' '-')
+        url="${PACKAGE_REGISTRY_URL}/${VERSION}/${upload_name}"
+        echo "Uploading ${fname} as ${upload_name}"
+        curl --fail --silent --show-error \
+          --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$f" "$url"
+        printf '{"name":"%s","url":"%s"}\n' "$fname" "$url" >> "assets/macos-${TARGET}.jsonl"
+      done
+  artifacts:
+    paths:
+      - assets/macos-*.jsonl
+    expire_in: 1 week
+
+# ---------------------------------------------------------------------------
+# Windows build (x64) — PowerShell shell
+# ---------------------------------------------------------------------------
+build:windows:
+  <<: *release_rules
+  stage: build
+  tags:
+    - saas-windows-medium-amd64
+  before_script:
+    - $env:VERSION = $env:CI_COMMIT_TAG -replace '^app-v', ''
+    # Node.js + pnpm
+    - choco install -y nodejs-lts --no-progress
+    - $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    - corepack enable
+    - corepack prepare pnpm@10 --activate
+    # Rust toolchain
+    - choco install -y rustup.install --no-progress
+    - $env:Path += ";$env:USERPROFILE\.cargo\bin"
+    - rustup default stable
+  script:
+    - $env:Path += ";$env:USERPROFILE\.cargo\bin"
+    - pnpm install --frozen-lockfile
+    - pnpm exec tauri build
+    - New-Item -ItemType Directory -Force -Path assets | Out-Null
+    - |
+      Get-ChildItem -Path src-tauri\target\release\bundle -Recurse -Include *.msi,*.exe | ForEach-Object {
+        $fname = $_.Name
+        # The generic package registry only allows [A-Za-z0-9._-+] in file names.
+        $uploadName = $fname -replace ' ', '-'
+        $url = "$env:PACKAGE_REGISTRY_URL/$env:VERSION/$uploadName"
+        Write-Host "Uploading $fname as $uploadName"
+        curl.exe --fail --silent --show-error --header "JOB-TOKEN: $env:CI_JOB_TOKEN" --upload-file $_.FullName $url
+        Add-Content -Path assets\windows.jsonl -Value ('{"name":"' + $fname + '","url":"' + $url + '"}')
+      }
+  artifacts:
+    paths:
+      - assets/windows.jsonl
+    expire_in: 1 week
+
+# ---------------------------------------------------------------------------
+# Create the GitLab Release, linking all uploaded installers.
+# ---------------------------------------------------------------------------
+release:
+  <<: *release_rules
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - build:linux
+    - build:macos
+    - build:windows
+  before_script:
+    - export VERSION="${CI_COMMIT_TAG#app-v}"
+  script:
+    - |
+      # Collect every uploaded asset into positional params so that filenames
+      # containing spaces are passed to release-cli as single arguments.
+      set --
+      for f in assets/*.jsonl; do
+        [ -e "$f" ] || continue
+        while IFS= read -r line; do
+          [ -n "$line" ] && set -- "$@" "--assets-link=$line"
+        done < "$f"
+      done
+      echo "Linking $# asset(s)"
+      release-cli create \
+        --name "Kiro Sessions Inspector v${VERSION}" \
+        --tag-name "${CI_COMMIT_TAG}" \
+        --description "Desktop build of Kiro Sessions Inspector for macOS, Windows, and Linux.
+
+        - **macOS**: the \`.dmg\`/\`.app.tar.gz\` is ad-hoc signed, not notarized. On first launch you may need to right-click → Open, or run: \`xattr -dr com.apple.quarantine /Applications/Kiro\\ Sessions\\ Inspector.app\`
+        - **Windows**: the \`.msi\`/\`.exe\` installer is unsigned — SmartScreen may warn on first run (\"More info\" → \"Run anyway\").
+        - **Linux**: \`.AppImage\` (portable) and \`.deb\` (Debian/Ubuntu) are provided." \
+        "$@"

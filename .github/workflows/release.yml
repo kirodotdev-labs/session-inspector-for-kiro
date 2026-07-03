@@ -1,79 +1,88 @@
-name: Release macOS app
+name: Release desktop app
 
-# Tag a release with `git tag v0.1.0 && git push --tags` and this workflow
-# will build an ad-hoc-signed .dmg and .zip and attach them to a GitHub
-# Release, producing a download link users can share.
+# Tag a release with `git tag app-v0.1.0 && git push --tags` (or run this
+# workflow manually via workflow_dispatch) to build the Tauri desktop app
+# for macOS (arm64 + x64), Windows (x64), and Linux (x64), and attach the
+# installers to a GitHub Release.
+#
+# Requires "Read and write permissions" for the GITHUB_TOKEN under
+# Settings > Actions > General > Workflow permissions.
 
 on:
   push:
     tags:
-      - "v*"
+      - "app-v*"
   workflow_dispatch:
     inputs:
       version:
-        description: "Version string (e.g. 0.1.0). Defaults to CFBundleShortVersionString."
+        description: "Version string (e.g. 0.2.0). Defaults to tauri.conf.json's version."
         required: false
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    # macos-14 is arm64. Pin to keep ABI predictable.
-    runs-on: macos-14
-    defaults:
-      run:
-        working-directory: macos-swift
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14 # Apple Silicon (arm64)
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-14 # Intel (x64)
+            args: "--target x86_64-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show tool versions
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
-          sw_vers
-          xcodebuild -version
-          swift --version
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
 
-      - name: Resolve version
-        id: version
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          else
-            VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Build artifacts
-        run: |
-          ./scripts/make-dmg.sh "${{ steps.version.outputs.version }}"
-          ./scripts/make-zip.sh "${{ steps.version.outputs.version }}"
-
-      - name: Compute checksums
-        run: |
-          cd .build/dist
-          shasum -a 256 * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      - name: Upload artifacts (workflow run)
-        uses: actions/upload-artifact@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          name: kiro-sessions-inspector-${{ steps.version.outputs.version }}
-          path: macos-swift/.build/dist/*
+          node-version: 20
 
-      - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          files: |
-            macos-swift/.build/dist/*.dmg
-            macos-swift/.build/dist/*.zip
-            macos-swift/.build/dist/SHA256SUMS.txt
-          body: |
-            macOS arm64 build of Kiro Sessions Inspector.
+          version: 10
 
-            The app is ad-hoc signed, not notarized. On first launch you may need to
-            right-click → Open, or run:
-              xattr -dr com.apple.quarantine /Applications/KiroSessionsInspector.app
-            See DISTRIBUTION.md in the repo for details.
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: app-v__VERSION__
+          releaseName: "Kiro Sessions Inspector v__VERSION__"
+          releaseBody: |
+            Desktop build of Kiro Sessions Inspector for macOS, Windows, and Linux.
+
+            - **macOS**: the `.dmg`/`.app.tar.gz` is ad-hoc signed, not notarized.
+              On first launch you may need to right-click → Open, or run:
+              `xattr -dr com.apple.quarantine /Applications/Kiro\ Sessions\ Inspector.app`
+            - **Windows**: the `.msi`/`.exe` installer is unsigned — Windows
+              SmartScreen may warn on first run ("More info" → "Run anyway").
+            - **Linux**: `.AppImage` (portable) and `.deb` (Debian/Ubuntu) are provided.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

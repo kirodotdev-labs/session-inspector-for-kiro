@@ -19,6 +19,7 @@ import {
   SOURCE_TEXT_CLASS,
 } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
+import { ActivityHeatmap } from "./ActivityHeatmap";
 import { useSettings } from "../lib/useSettings";
 import {
   getDashboard,
@@ -258,6 +259,9 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
           ))}
         </div>
       )}
+
+      {/* Activity heat map */}
+      <ActivityHeatmap daily={data.daily} />
 
       {/* Daily activity chart (last 30 days) */}
       <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
