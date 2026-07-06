@@ -2,15 +2,20 @@ import { useState, useEffect, useCallback } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
-import { WorkspacesView } from "./components/WorkspacesView";
 import { AnalyzeView } from "./components/AnalyzeView";
+import { SettingsView } from "./components/SettingsView";
 import { Tabs } from "./components/Tabs";
 import type { Source } from "./lib/source";
 import { listWorkspaces, getSessionDetail } from "./lib/api";
 
 export type { Source };
 
-export type View = "dashboard" | "sessions" | "workspaces" | "analyze";
+export type View =
+  | "dashboard"
+  | "session"
+  | "workspace"
+  | "analyze"
+  | "settings";
 
 export interface Workspace {
   id: string;
@@ -63,6 +68,11 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<View>("dashboard");
   const [refreshing, setRefreshing] = useState(false);
+  // Workspace whose dashboard the Workspace tab shows. Set by picking a
+  // workspace directly, or implicitly by the workspace of a selected session.
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
+    null,
+  );
 
   const loadWorkspaces = useCallback(() => {
     setRefreshing(true);
@@ -86,14 +96,27 @@ function App() {
     );
   }, [selectedSession]);
 
+  // The workspace backing the Workspace tab: an explicitly selected workspace,
+  // else the one owning the selected session.
+  const activeWorkspaceId = selectedWorkspaceId ?? selectedSession?.workspaceId ?? null;
+  const activeWorkspace = activeWorkspaceId
+    ? workspaces.find((w) => w.id === activeWorkspaceId) ?? null
+    : null;
+
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar
         workspaces={workspaces}
         selectedSession={selectedSession}
+        selectedWorkspaceId={activeWorkspaceId}
         onSelect={(workspaceId, sessionId) => {
           setSelectedSession({ workspaceId, sessionId });
-          setView("sessions");
+          setSelectedWorkspaceId(workspaceId);
+          setView("session");
+        }}
+        onSelectWorkspace={(workspaceId) => {
+          setSelectedWorkspaceId(workspaceId);
+          setView("workspace");
         }}
         onRefresh={loadWorkspaces}
         refreshing={refreshing}
@@ -105,14 +128,26 @@ function App() {
             <Dashboard />
           ) : view === "analyze" ? (
             <AnalyzeView />
-          ) : view === "workspaces" ? (
-            <WorkspacesView
-              workspaces={workspaces}
-              onSelectSession={(workspaceId, sessionId) => {
-                setSelectedSession({ workspaceId, sessionId });
-                setView("sessions");
-              }}
-            />
+          ) : view === "settings" ? (
+            <SettingsView />
+          ) : view === "workspace" ? (
+            activeWorkspace ? (
+              <Dashboard
+                key={activeWorkspace.path}
+                workspacePath={activeWorkspace.path}
+                workspaceName={activeWorkspace.name}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
+                <div className="text-center">
+                  <p className="text-2xl font-light mb-2">Workspace</p>
+                  <p className="text-sm">
+                    Select a workspace or a session from the sidebar to see its
+                    dashboard
+                  </p>
+                </div>
+              </div>
+            )
           ) : loading ? (
             <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
               Loading session...

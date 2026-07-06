@@ -3,22 +3,21 @@ import {
   ChevronRight,
   FolderOpen,
   MessageSquare,
-  SlidersHorizontal,
   RefreshCw,
-  Terminal,
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { Workspace } from "../App";
 import type { Source } from "../lib/source";
 import { ALL_SOURCES, SOURCE_LABELS, SOURCE_TEXT_CLASS } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
-import { Toggle } from "./Toggle";
 import { useSettings } from "../lib/useSettings";
 
 interface Props {
   workspaces: Workspace[];
   selectedSession: { workspaceId: string; sessionId: string } | null;
+  selectedWorkspaceId: string | null;
   onSelect: (workspaceId: string, sessionId: string) => void;
+  onSelectWorkspace: (workspaceId: string) => void;
   onRefresh?: () => void;
   refreshing?: boolean;
 }
@@ -28,14 +27,15 @@ type SourceFilter = "all" | Source;
 export function Sidebar({
   workspaces,
   selectedSession,
+  selectedWorkspaceId,
   onSelect,
+  onSelectWorkspace,
   onRefresh,
   refreshing,
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
-  const { showNonUnified, setShowNonUnified, kiroCliPath, setKiroCliPath } =
-    useSettings();
+  const { showNonUnified } = useSettings();
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -169,30 +169,46 @@ export function Sidebar({
               <div className="space-y-0.5">
                 {list.map((ws) => (
                   <div key={ws.id}>
-                    <button
-                      onClick={() => toggle(ws.id)}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-[var(--bg-tertiary)] text-left text-sm transition-colors"
-                    >
-                      <ChevronRight
-                        size={14}
-                        className={clsx(
-                          "text-[var(--text-secondary)] transition-transform shrink-0",
-                          expanded.has(ws.id) && "rotate-90",
-                        )}
-                      />
-                      {source === "ide" ? (
-                        <FolderOpen
-                          size={14}
-                          className="text-[var(--accent)] shrink-0"
-                        />
-                      ) : (
-                        <SourceIcon source={source} size={14} />
+                    <div
+                      className={clsx(
+                        "w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-colors",
+                        selectedWorkspaceId === ws.id
+                          ? "bg-[var(--bg-tertiary)]"
+                          : "hover:bg-[var(--bg-tertiary)]",
                       )}
-                      <span className="truncate flex-1">{ws.name}</span>
-                      <span className="text-xs text-[var(--text-secondary)] tabular-nums">
-                        {ws.sessionCount}
-                      </span>
-                    </button>
+                    >
+                      <button
+                        onClick={() => toggle(ws.id)}
+                        aria-label="Toggle sessions"
+                        className="shrink-0 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                      >
+                        <ChevronRight
+                          size={14}
+                          className={clsx(
+                            "transition-transform",
+                            expanded.has(ws.id) && "rotate-90",
+                          )}
+                        />
+                      </button>
+                      <button
+                        onClick={() => onSelectWorkspace(ws.id)}
+                        title="Show workspace dashboard"
+                        className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                      >
+                        {source === "ide" ? (
+                          <FolderOpen
+                            size={14}
+                            className="text-[var(--accent)] shrink-0"
+                          />
+                        ) : (
+                          <SourceIcon source={source} size={14} />
+                        )}
+                        <span className="truncate flex-1">{ws.name}</span>
+                        <span className="text-xs text-[var(--text-secondary)] tabular-nums">
+                          {ws.sessionCount}
+                        </span>
+                      </button>
+                    </div>
                     {expanded.has(ws.id) && (
                       <div className="ml-5 pl-2 border-l border-[var(--border)] space-y-0.5 mt-0.5">
                         {ws.sessions
@@ -236,33 +252,6 @@ export function Sidebar({
             No workspaces for this filter.
           </div>
         )}
-      </div>
-
-      <div className="border-t border-[var(--border)] bg-[var(--bg-secondary)] text-xs text-[var(--text-secondary)]">
-        <div className="flex items-center gap-2 px-3 py-2.5">
-          <SlidersHorizontal size={11} />
-          <span className="flex-1">Show non-unified sessions</span>
-          <Toggle
-            checked={showNonUnified}
-            onChange={setShowNonUnified}
-            label="Show non-unified sessions"
-          />
-        </div>
-        <div className="flex flex-col gap-1 px-3 pb-2.5">
-          <label htmlFor="kiro-cli-path" className="flex items-center gap-1.5">
-            <Terminal size={11} />
-            <span>kiro-cli path</span>
-          </label>
-          <input
-            id="kiro-cli-path"
-            type="text"
-            value={kiroCliPath}
-            onChange={(e) => setKiroCliPath(e.target.value)}
-            placeholder="kiro-cli"
-            spellCheck={false}
-            className="w-full px-2 py-1 rounded-md bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]/60 focus:outline-none focus:border-[var(--accent)]/50"
-          />
-        </div>
       </div>
     </aside>
   );

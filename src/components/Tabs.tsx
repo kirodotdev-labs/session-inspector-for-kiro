@@ -1,4 +1,4 @@
-import { LayoutDashboard, List, Boxes, Sparkles } from "lucide-react";
+import { LayoutDashboard, List, Boxes, Sparkles, Settings } from "lucide-react";
 import { clsx } from "clsx";
 import type { View } from "../App";
 
@@ -8,10 +8,11 @@ interface Props {
 }
 
 const TABS: { view: View; label: string; icon: typeof LayoutDashboard }[] = [
-  { view: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { view: "dashboard", label: "Overview", icon: LayoutDashboard },
   { view: "analyze", label: "Analyze", icon: Sparkles },
-  { view: "workspaces", label: "Workspaces", icon: Boxes },
-  { view: "sessions", label: "Sessions", icon: List },
+  { view: "workspace", label: "Workspace", icon: Boxes },
+  { view: "session", label: "Session", icon: List },
+  { view: "settings", label: "Settings", icon: Settings },
 ];
 
 /** Primary view navigation, shown as a top bar in the main panel. */

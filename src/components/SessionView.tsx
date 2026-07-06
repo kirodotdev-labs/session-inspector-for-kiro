@@ -217,9 +217,10 @@ function ActionBlock({ action }: { action: Action }) {
 }
 
 /** Builds the shell command to resume this session from its workspace. */
-function resumeCommand(session: SessionDetail): string {
+function resumeCommand(session: SessionDetail, cliPath: string): string {
   const flags = session.source === "unified" ? "--v3 " : "";
-  return `cd ${session.workspacePath} && kiro-cli ${flags}--resume-id ${session.sessionId}`;
+  const bin = cliPath.trim() || "kiro-cli";
+  return `cd ${session.workspacePath} && ${bin} ${flags}--resume-id ${session.sessionId}`;
 }
 
 async function copyToClipboard(text: string) {
@@ -242,6 +243,7 @@ function SessionIdCopy({ session }: { session: SessionDetail }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const { kiroCliPath } = useSettings();
 
   useEffect(() => {
     if (!open) return;
@@ -286,7 +288,7 @@ function SessionIdCopy({ session }: { session: SessionDetail }) {
             <Copy size={12} /> Copy session ID
           </button>
           <button
-            onClick={() => copy(resumeCommand(session))}
+            onClick={() => copy(resumeCommand(session, kiroCliPath))}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
           >
             <Terminal size={12} /> Copy resume command
