@@ -1,9 +1,40 @@
+mod analysis;
 mod commands;
+mod mcp;
 mod sessions;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
+
+/// Headless entry point: run the stdio MCP server (spawned by kiro-cli).
+pub fn run_mcp_server() {
+    mcp::serve();
+}
+
+/// Headless entry point: print the optimized overview JSON for a window.
+pub fn print_stats(window: &str) {
+    let win = analysis::Window::parse(window).unwrap_or(analysis::Window::Week);
+    let paths = sessions::paths::resolve();
+    let overview = analysis::compute_overview(&paths, win);
+    println!("{}", serde_json::to_string_pretty(&overview).unwrap_or_default());
+}
+
+/// Headless entry point: run a full analysis (spawns kiro-cli), persist the
+/// HTML report, and print its file path to stdout (or the error to stderr).
+/// `cli_path` optionally overrides the resolved kiro-cli binary (defaults to
+/// PATH resolution / the common `~/.local/bin/kiro-cli` install location).
+pub fn run_analysis_cli(window: &str, cli_path: Option<&str>) {
+    let win = analysis::Window::parse(window).unwrap_or(analysis::Window::Week);
+    match analysis::orchestrator::run(win, None, cli_path) {
+        Ok(record) => println!("{}", record.html_path),
+        Err(e) => {
+            eprintln!("analysis failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -69,6 +100,10 @@ pub fn run() {
       commands::get_dashboard,
       commands::get_unified_dashboard,
       commands::get_workspace_dashboard,
+      commands::run_analysis,
+      commands::list_analyses,
+      commands::open_analysis,
+      commands::delete_analysis,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

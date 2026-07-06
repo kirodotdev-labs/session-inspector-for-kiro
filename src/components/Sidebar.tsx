@@ -3,13 +3,12 @@ import {
   ChevronRight,
   FolderOpen,
   MessageSquare,
-  LayoutDashboard,
-  List,
-  Boxes,
   SlidersHorizontal,
+  RefreshCw,
+  Terminal,
 } from "lucide-react";
 import { clsx } from "clsx";
-import type { Workspace, View } from "../App";
+import type { Workspace } from "../App";
 import type { Source } from "../lib/source";
 import { ALL_SOURCES, SOURCE_LABELS, SOURCE_TEXT_CLASS } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
@@ -20,8 +19,8 @@ interface Props {
   workspaces: Workspace[];
   selectedSession: { workspaceId: string; sessionId: string } | null;
   onSelect: (workspaceId: string, sessionId: string) => void;
-  view: View;
-  onViewChange: (view: View) => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 type SourceFilter = "all" | Source;
@@ -30,12 +29,13 @@ export function Sidebar({
   workspaces,
   selectedSession,
   onSelect,
-  view,
-  onViewChange,
+  onRefresh,
+  refreshing,
 }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
-  const { showNonUnified, setShowNonUnified } = useSettings();
+  const { showNonUnified, setShowNonUnified, kiroCliPath, setKiroCliPath } =
+    useSettings();
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -85,9 +85,25 @@ export function Sidebar({
   return (
     <aside className="w-80 h-full border-r border-[var(--border)] bg-[var(--bg-secondary)] flex flex-col">
       <div className="p-4 border-b border-[var(--border)]">
-        <h1 className="text-sm font-semibold tracking-wide uppercase text-[var(--accent)]">
-          Sessions Inspector
-        </h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-sm font-semibold tracking-wide uppercase text-[var(--accent)]">
+            Sessions Inspector
+          </h1>
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              disabled={refreshing}
+              title="Refresh sessions"
+              aria-label="Refresh sessions"
+              className="p-1 rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50"
+            >
+              <RefreshCw
+                size={13}
+                className={clsx(refreshing && "animate-spin")}
+              />
+            </button>
+          )}
+        </div>
         <p className="text-xs text-[var(--text-secondary)] mt-1">
           {totalWorkspaces} workspaces • {totalSessions} sessions
         </p>
@@ -107,42 +123,6 @@ export function Sidebar({
             </span>
           </div>
         )}
-      </div>
-
-      <div className="flex border-b border-[var(--border)]">
-        <button
-          onClick={() => onViewChange("dashboard")}
-          className={clsx(
-            "flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors",
-            view === "dashboard"
-              ? "text-[var(--accent)] border-b-2 border-[var(--accent)]"
-              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-          )}
-        >
-          <LayoutDashboard size={12} /> Dashboard
-        </button>
-        <button
-          onClick={() => onViewChange("workspaces")}
-          className={clsx(
-            "flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors",
-            view === "workspaces"
-              ? "text-[var(--accent)] border-b-2 border-[var(--accent)]"
-              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-          )}
-        >
-          <Boxes size={12} /> Workspaces
-        </button>
-        <button
-          onClick={() => onViewChange("sessions")}
-          className={clsx(
-            "flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors",
-            view === "sessions"
-              ? "text-[var(--accent)] border-b-2 border-[var(--accent)]"
-              : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-          )}
-        >
-          <List size={12} /> Sessions
-        </button>
       </div>
 
       {showNonUnified && (
@@ -258,14 +238,31 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="flex items-center gap-2 px-3 py-2.5 border-t border-[var(--border)] bg-[var(--bg-secondary)] text-xs text-[var(--text-secondary)]">
-        <SlidersHorizontal size={11} />
-        <span className="flex-1">Show non-unified sessions</span>
-        <Toggle
-          checked={showNonUnified}
-          onChange={setShowNonUnified}
-          label="Show non-unified sessions"
-        />
+      <div className="border-t border-[var(--border)] bg-[var(--bg-secondary)] text-xs text-[var(--text-secondary)]">
+        <div className="flex items-center gap-2 px-3 py-2.5">
+          <SlidersHorizontal size={11} />
+          <span className="flex-1">Show non-unified sessions</span>
+          <Toggle
+            checked={showNonUnified}
+            onChange={setShowNonUnified}
+            label="Show non-unified sessions"
+          />
+        </div>
+        <div className="flex flex-col gap-1 px-3 pb-2.5">
+          <label htmlFor="kiro-cli-path" className="flex items-center gap-1.5">
+            <Terminal size={11} />
+            <span>kiro-cli path</span>
+          </label>
+          <input
+            id="kiro-cli-path"
+            type="text"
+            value={kiroCliPath}
+            onChange={(e) => setKiroCliPath(e.target.value)}
+            placeholder="kiro-cli"
+            spellCheck={false}
+            className="w-full px-2 py-1 rounded-md bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]/60 focus:outline-none focus:border-[var(--accent)]/50"
+          />
+        </div>
       </div>
     </aside>
   );

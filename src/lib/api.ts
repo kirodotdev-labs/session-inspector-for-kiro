@@ -81,3 +81,69 @@ export async function getWorkspaceDashboard<T = unknown>(
   const r = await fetch(url);
   return r.json();
 }
+
+/**
+ * A stored analysis (metadata). The HTML report lives on disk at `htmlPath`
+ * and is opened in the browser via `openAnalysis`.
+ */
+export interface AnalysisRecord {
+  id: string;
+  window: "day" | "week" | "month";
+  voice: string;
+  createdAt: number;
+  htmlPath: string;
+  reportBytes: number;
+}
+
+/**
+ * Run a headless Kiro analysis over the given window ("day" | "week" |
+ * "month"). This spawns the local `kiro-cli` and a Rust-hosted stats MCP
+ * server, persists the resulting HTML report, and returns its stored record.
+ * Only available in the desktop (Tauri) app — the browser cannot launch a
+ * subprocess.
+ */
+export async function runAnalysis(
+  window: "day" | "week" | "month",
+  voice?: "default" | "blunt" | "neutral",
+  cliPath?: string,
+): Promise<AnalysisRecord> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<AnalysisRecord>("run_analysis", { window, voice, cliPath });
+  }
+  throw new Error(
+    "Session analysis runs the local kiro-cli and is only available in the desktop app.",
+  );
+}
+
+/** List all stored analyses, newest first. */
+export async function listAnalyses(): Promise<AnalysisRecord[]> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<AnalysisRecord[]>("list_analyses");
+  }
+  return [];
+}
+
+/** Open a stored analysis's HTML report in the default browser. */
+export async function openAnalysis(id: string): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<void>("open_analysis", { id });
+  }
+  throw new Error("Opening reports is only available in the desktop app.");
+}
+
+/** Delete a stored analysis (HTML + metadata) by id. */
+export async function deleteAnalysis(id: string): Promise<void> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<void>("delete_analysis", { id });
+  }
+  throw new Error("Deleting reports is only available in the desktop app.");
+}
+
+/** True when running inside the Tauri desktop shell (analysis requires it). */
+export function isDesktop(): boolean {
+  return isTauri();
+}

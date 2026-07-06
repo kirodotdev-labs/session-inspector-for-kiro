@@ -3,11 +3,14 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
 import { SettingsProvider } from "./lib/settings";
+import { AnalysisProvider } from "./lib/analysis";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <SettingsProvider>
-      <App />
+      <AnalysisProvider>
+        <App />
+      </AnalysisProvider>
     </SettingsProvider>
   </StrictMode>
 );

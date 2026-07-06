@@ -1,14 +1,16 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
 import { WorkspacesView } from "./components/WorkspacesView";
+import { AnalyzeView } from "./components/AnalyzeView";
+import { Tabs } from "./components/Tabs";
 import type { Source } from "./lib/source";
 import { listWorkspaces, getSessionDetail } from "./lib/api";
 
 export type { Source };
 
-export type View = "dashboard" | "sessions" | "workspaces";
+export type View = "dashboard" | "sessions" | "workspaces" | "analyze";
 
 export interface Workspace {
   id: string;
@@ -60,10 +62,18 @@ function App() {
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<View>("dashboard");
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadWorkspaces = useCallback(() => {
+    setRefreshing(true);
+    return listWorkspaces()
+      .then(setWorkspaces)
+      .finally(() => setRefreshing(false));
+  }, []);
 
   useEffect(() => {
-    listWorkspaces().then(setWorkspaces);
-  }, []);
+    loadWorkspaces();
+  }, [loadWorkspaces]);
 
   useEffect(() => {
     if (!selectedSession) return;
@@ -85,38 +95,43 @@ function App() {
           setSelectedSession({ workspaceId, sessionId });
           setView("sessions");
         }}
-        view={view}
-        onViewChange={setView}
+        onRefresh={loadWorkspaces}
+        refreshing={refreshing}
       />
-      <main className="flex-1 overflow-y-auto">
-        {view === "dashboard" ? (
-          <Dashboard />
-        ) : view === "workspaces" ? (
-          <WorkspacesView
-            workspaces={workspaces}
-            onSelectSession={(workspaceId, sessionId) => {
-              setSelectedSession({ workspaceId, sessionId });
-              setView("sessions");
-            }}
-          />
-        ) : loading ? (
-          <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
-            Loading session...
-          </div>
-        ) : session ? (
-          <SessionView session={session} />
-        ) : (
-          <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
-            <div className="text-center">
-              <p className="text-2xl font-light mb-2">
-                Kiro Sessions Inspector
-              </p>
-              <p className="text-sm">
-                Select a session from the sidebar to inspect
-              </p>
+      <main className="flex-1 flex flex-col overflow-hidden">
+        <Tabs view={view} onViewChange={setView} />
+        <div className="flex-1 overflow-y-auto">
+          {view === "dashboard" ? (
+            <Dashboard />
+          ) : view === "analyze" ? (
+            <AnalyzeView />
+          ) : view === "workspaces" ? (
+            <WorkspacesView
+              workspaces={workspaces}
+              onSelectSession={(workspaceId, sessionId) => {
+                setSelectedSession({ workspaceId, sessionId });
+                setView("sessions");
+              }}
+            />
+          ) : loading ? (
+            <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
+              Loading session...
             </div>
-          </div>
-        )}
+          ) : session ? (
+            <SessionView session={session} />
+          ) : (
+            <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
+              <div className="text-center">
+                <p className="text-2xl font-light mb-2">
+                  Kiro Sessions Inspector
+                </p>
+                <p className="text-sm">
+                  Select a session from the sidebar to inspect
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );
