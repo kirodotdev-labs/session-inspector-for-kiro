@@ -8,6 +8,8 @@ use crate::analysis::orchestrator;
 use crate::analysis::store::{self, AnalysisRecord};
 use crate::analysis::Window;
 
+use crate::search::{self, IndexStats, SearchFilters, SearchResults};
+
 fn parse_source(s: &str) -> Option<Source> {
     match s {
         "ide" => Some(Source::Ide),
@@ -91,6 +93,49 @@ pub async fn run_analysis(
 #[tauri::command]
 pub fn list_analyses() -> Vec<AnalysisRecord> {
     store::list()
+}
+
+/// Free-text search across indexed sessions. Results are grouped per session
+/// with highlighted snippets and ranked by BM25. Sessions deleted from disk
+/// after indexing remain searchable (flagged `onDisk: false`).
+#[tauri::command]
+pub fn search_sessions(
+    query: String,
+    source: Option<String>,
+    workspace_path: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<SearchResults, String> {
+    let filters = SearchFilters {
+        source,
+        workspace_path,
+    };
+    search::search(&query, &filters, limit.unwrap_or(50), offset.unwrap_or(0))
+}
+
+/// Incrementally bring the search index up to date, or fully rebuild it when
+/// `full` is true. Returns the resulting index statistics.
+#[tauri::command]
+pub async fn reindex_sessions(full: Option<bool>) -> Result<IndexStats, String> {
+    let full = full.unwrap_or(false);
+    // Indexing walks the filesystem and parses sessions; keep it off the main
+    // thread so the UI stays responsive.
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = paths::resolve();
+        if full {
+            search::reindex_all(&paths)
+        } else {
+            search::index_incremental(&paths)
+        }
+    })
+    .await
+    .map_err(|e| format!("reindex task failed: {e}"))?
+}
+
+/// Current search index statistics (session/message counts, last-indexed time).
+#[tauri::command]
+pub fn search_index_stats() -> Result<IndexStats, String> {
+    search::index_stats()
 }
 
 /// Open a stored analysis's HTML report in the default browser.

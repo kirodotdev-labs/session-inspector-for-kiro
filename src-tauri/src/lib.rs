@@ -1,6 +1,7 @@
 mod analysis;
 mod commands;
 mod mcp;
+mod search;
 mod sessions;
 
 use tauri::menu::{Menu, MenuItem};
@@ -39,6 +40,8 @@ pub fn run_analysis_cli(window: &str, cli_path: Option<&str>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_process::init())
+    .plugin(tauri_plugin_updater::Builder::new().build())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -84,6 +87,19 @@ pub fn run() {
         })
         .build(app)?;
 
+      // Warm the search index in the background so the first search hits an
+      // up-to-date index without blocking startup.
+      tauri::async_runtime::spawn(async {
+        tauri::async_runtime::spawn_blocking(|| {
+          let paths = sessions::paths::resolve();
+          if let Err(e) = search::index_incremental(&paths) {
+            log::warn!("startup search indexing failed: {e}");
+          }
+        })
+        .await
+        .ok();
+      });
+
       Ok(())
     })
     .on_window_event(|window, event| {
@@ -104,6 +120,9 @@ pub fn run() {
       commands::list_analyses,
       commands::open_analysis,
       commands::delete_analysis,
+      commands::search_sessions,
+      commands::reindex_sessions,
+      commands::search_index_stats,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

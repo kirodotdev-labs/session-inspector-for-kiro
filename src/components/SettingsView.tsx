@@ -1,6 +1,17 @@
-import { Settings as SettingsIcon, SlidersHorizontal, Terminal } from "lucide-react";
+import {
+  Settings as SettingsIcon,
+  SlidersHorizontal,
+  Terminal,
+  ArrowUpCircle,
+  Loader2,
+  CheckCircle2,
+  AlertTriangle,
+  Download,
+} from "lucide-react";
 import { Toggle } from "./Toggle";
 import { useSettings } from "../lib/useSettings";
+import { useUpdater } from "../lib/useUpdater";
+import { isDesktop } from "../lib/api";
 
 /** Dedicated settings screen (moved out of the sidebar footer). */
 export function SettingsView() {
@@ -73,6 +84,78 @@ export function SettingsView() {
           to <code>~/.local/bin/kiro-cli</code>).
         </p>
       </section>
+
+      <UpdatesSection />
     </div>
+  );
+}
+
+function UpdatesSection() {
+  const { status, currentVersion, update, error, check, install } =
+    useUpdater();
+  const desktop = isDesktop();
+  const busy = status === "checking" || status === "downloading" || status === "installing";
+
+  return (
+    <section className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-4">
+      <h3 className="text-xs uppercase tracking-wide text-[var(--text-secondary)] mb-3">
+        Updates
+      </h3>
+      <div className="flex items-center gap-3">
+        <ArrowUpCircle size={15} className="text-[var(--text-secondary)] shrink-0" />
+        <div className="flex-1">
+          <div className="text-sm text-[var(--text-primary)]">
+            Current version{currentVersion ? ` — v${currentVersion}` : ""}
+          </div>
+          <div className="text-xs text-[var(--text-secondary)] mt-0.5">
+            {!desktop
+              ? "Updates are only available in the desktop app."
+              : status === "available"
+                ? `Update available: v${update?.version}`
+                : status === "uptodate"
+                  ? "You’re on the latest version."
+                  : status === "checking"
+                    ? "Checking for updates…"
+                    : status === "downloading"
+                      ? "Downloading update…"
+                      : status === "installing"
+                        ? "Installing… the app will restart"
+                        : status === "error"
+                          ? "Update check failed."
+                          : "Automatically checks on launch."}
+          </div>
+        </div>
+        {desktop &&
+          (status === "available" ? (
+            <button
+              onClick={install}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+            >
+              <Download size={13} /> Install & restart
+            </button>
+          ) : (
+            <button
+              onClick={check}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[var(--border)] text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
+            >
+              {busy ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : status === "uptodate" ? (
+                <CheckCircle2 size={13} className="text-emerald-400" />
+              ) : (
+                <ArrowUpCircle size={13} />
+              )}
+              Check for updates
+            </button>
+          ))}
+      </div>
+      {error && (
+        <p className="text-xs text-red-300 flex items-center gap-1.5 mt-2">
+          <AlertTriangle size={12} /> {error}
+        </p>
+      )}
+    </section>
   );
 }

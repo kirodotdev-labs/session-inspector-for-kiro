@@ -3,8 +3,10 @@ import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
 import { AnalyzeView } from "./components/AnalyzeView";
+import { SearchView } from "./components/SearchView";
 import { SettingsView } from "./components/SettingsView";
 import { Tabs } from "./components/Tabs";
+import { UpdateBanner } from "./components/UpdateBanner";
 import type { Source } from "./lib/source";
 import { listWorkspaces, getSessionDetail } from "./lib/api";
 
@@ -14,6 +16,7 @@ export type View =
   | "dashboard"
   | "session"
   | "workspace"
+  | "search"
   | "analyze"
   | "settings";
 
@@ -104,28 +107,38 @@ function App() {
     : null;
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar
-        workspaces={workspaces}
-        selectedSession={selectedSession}
-        selectedWorkspaceId={activeWorkspaceId}
-        onSelect={(workspaceId, sessionId) => {
-          setSelectedSession({ workspaceId, sessionId });
-          setSelectedWorkspaceId(workspaceId);
-          setView("session");
-        }}
-        onSelectWorkspace={(workspaceId) => {
-          setSelectedWorkspaceId(workspaceId);
-          setView("workspace");
-        }}
-        onRefresh={loadWorkspaces}
-        refreshing={refreshing}
-      />
+    <div className="flex flex-col h-screen overflow-hidden">
+      <UpdateBanner />
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar
+          workspaces={workspaces}
+          selectedSession={selectedSession}
+          selectedWorkspaceId={activeWorkspaceId}
+          onSelect={(workspaceId, sessionId) => {
+            setSelectedSession({ workspaceId, sessionId });
+            setSelectedWorkspaceId(workspaceId);
+            setView("session");
+          }}
+          onSelectWorkspace={(workspaceId) => {
+            setSelectedWorkspaceId(workspaceId);
+            setView("workspace");
+          }}
+          onRefresh={loadWorkspaces}
+          refreshing={refreshing}
+        />
       <main className="flex-1 flex flex-col overflow-hidden">
         <Tabs view={view} onViewChange={setView} />
         <div className="flex-1 overflow-y-auto">
           {view === "dashboard" ? (
             <Dashboard />
+          ) : view === "search" ? (
+            <SearchView
+              onOpenSession={(workspaceId, sessionId) => {
+                setSelectedSession({ workspaceId, sessionId });
+                setSelectedWorkspaceId(workspaceId);
+                setView("session");
+              }}
+            />
           ) : view === "analyze" ? (
             <AnalyzeView />
           ) : view === "settings" ? (
@@ -168,6 +181,7 @@ function App() {
           )}
         </div>
       </main>
+      </div>
     </div>
   );
 }

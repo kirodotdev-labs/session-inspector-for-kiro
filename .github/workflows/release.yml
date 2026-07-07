@@ -71,6 +71,11 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing — set these as repo Actions secrets. With
+          # bundle.createUpdaterArtifacts=true, tauri-action signs the updater
+          # artifacts and uploads a generated latest.json to the Release.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: app-v__VERSION__
           releaseName: "Kiro Sessions Inspector v__VERSION__"
@@ -83,6 +88,8 @@ jobs:
             - **Windows**: the `.msi`/`.exe` installer is unsigned — Windows
               SmartScreen may warn on first run ("More info" → "Run anyway").
             - **Linux**: `.AppImage` (portable) and `.deb` (Debian/Ubuntu) are provided.
-          releaseDraft: true
+          # Must be a published (non-draft, non-prerelease) release for the
+          # updater's /releases/latest/download/latest.json URL to resolve.
+          releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

@@ -6,7 +6,7 @@
  * via `vite dev` — this keeps `pnpm run start` working for day-to-day
  * frontend iteration without requiring the Tauri toolchain.
  */
-import type { Workspace, SessionDetail } from "../App";
+import type { Workspace, SessionDetail, Source } from "../App";
 
 const API = "http://localhost:3001/api";
 
@@ -146,4 +146,89 @@ export async function deleteAnalysis(id: string): Promise<void> {
 /** True when running inside the Tauri desktop shell (analysis requires it). */
 export function isDesktop(): boolean {
   return isTauri();
+}
+
+/** One highlighted snippet from a matching message (HTML `<mark>` markers). */
+export interface SearchSnippet {
+  role: string;
+  text: string;
+}
+
+/** A single search result, grouped per session. */
+export interface SearchHit {
+  sessionId: string;
+  workspaceId: string;
+  source: Source;
+  workspacePath: string;
+  title: string;
+  model: string;
+  date: number;
+  /** False when the session's files were deleted from disk after indexing. */
+  onDisk: boolean;
+  /** BM25 score (lower is a better match). */
+  score: number;
+  matchCount: number;
+  snippets: SearchSnippet[];
+}
+
+export interface SearchResults {
+  hits: SearchHit[];
+  total: number;
+  query: string;
+}
+
+export interface IndexStats {
+  sessionCount: number;
+  messageCount: number;
+  onDiskCount: number;
+  archivedCount: number;
+  lastIndexedAt: number | null;
+}
+
+/**
+ * Free-text search across indexed sessions. Results are grouped per session,
+ * ranked by relevance, with highlighted snippets. Sessions deleted from disk
+ * after indexing remain searchable (`onDisk: false`). Desktop-only.
+ */
+export async function searchSessions(
+  query: string,
+  opts: {
+    source?: Source;
+    workspacePath?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<SearchResults> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<SearchResults>("search_sessions", {
+      query,
+      source: opts.source,
+      workspacePath: opts.workspacePath,
+      limit: opts.limit,
+      offset: opts.offset,
+    });
+  }
+  throw new Error("Session search is only available in the desktop app.");
+}
+
+/**
+ * Bring the search index up to date (incremental), or fully rebuild it when
+ * `full` is true. Returns the resulting index statistics. Desktop-only.
+ */
+export async function reindexSessions(full = false): Promise<IndexStats> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<IndexStats>("reindex_sessions", { full });
+  }
+  throw new Error("Reindexing is only available in the desktop app.");
+}
+
+/** Current search index statistics. Desktop-only. */
+export async function searchIndexStats(): Promise<IndexStats> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<IndexStats>("search_index_stats");
+  }
+  throw new Error("Search index stats are only available in the desktop app.");
 }

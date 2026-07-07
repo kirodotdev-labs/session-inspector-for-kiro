@@ -1,4 +1,4 @@
-import { LayoutDashboard, List, Boxes, Sparkles, Settings } from "lucide-react";
+import { LayoutDashboard, List, Boxes, Sparkles, Settings, Search } from "lucide-react";
 import { clsx } from "clsx";
 import type { View } from "../App";
 
@@ -9,6 +9,7 @@ interface Props {
 
 const TABS: { view: View; label: string; icon: typeof LayoutDashboard }[] = [
   { view: "dashboard", label: "Overview", icon: LayoutDashboard },
+  { view: "search", label: "Search", icon: Search },
   { view: "analyze", label: "Analyze", icon: Sparkles },
   { view: "workspace", label: "Workspace", icon: Boxes },
   { view: "session", label: "Session", icon: List },
