@@ -1,43 +1,12 @@
 # Kiro Sessions Inspector
 
-Inspect the sessions and tool executions recorded by the Kiro IDE directly
-from your local Application Support folder. The app ships in two forms from
-this repo:
+Inspect the sessions and tool executions recorded by the Kiro IDE and CLI
+directly from your local Application Support folder. It's a **desktop (Tauri)**
+app — the React UI wrapped in a native shell for macOS, Windows, and Linux. No
+server required; session data is read directly from disk via Rust commands.
 
-- **Desktop (Tauri)** — the React UI wrapped in a native shell for macOS,
-  Windows, and Linux. No server required; session data is read directly
-  from disk via Rust commands.
-- **Web** — the same React + Vite UI with a small Express backend that reads
-  the session JSON files. Runs in a browser.
-
-Both read the same on-disk format documented in
+It reads the on-disk format documented in
 [`KIRO_SESSION_FORMAT.md`](KIRO_SESSION_FORMAT.md).
-
----
-
-## Web version (React + Express)
-
-### Requirements
-
-- Node 20+
-- [pnpm](https://pnpm.io/) (installed via `corepack enable` or `brew install pnpm`)
-
-### Install and run
-
-```bash
-pnpm install
-pnpm start
-```
-
-`pnpm start` uses [`concurrently`](https://www.npmjs.com/package/concurrently)
-to launch two processes:
-
-| Script        | What it does                                              | Port |
-| ------------- | --------------------------------------------------------- | ---- |
-| `pnpm dev`    | Vite dev server for the React UI with HMR                 | 5173 |
-| `pnpm server` | Express API (`server/index.ts`) that streams session JSON | 3000 |
-
-Open <http://localhost:5173> once both are running.
 
 ### Layout
 
@@ -49,53 +18,35 @@ src/
     Dashboard.tsx       # aggregate stats, charts, breakdowns
     SessionView.tsx     # message thread with expandable tool calls
     Sidebar.tsx         # workspace + session list
-server/
-  index.ts              # Express API reading ~/Library/Application Support/Kiro
+    SearchView.tsx      # full-text session search
+src-tauri/
+  src/sessions/         # reads ~/Library/Application Support/Kiro + ~/.kiro
+  src/search/           # persistent SQLite FTS5 search index
 ```
 
 ### Data sources
 
-The Express backend reads directly from:
+The Rust backend reads directly from:
 
 ```
 ~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/
   workspace-sessions/           # per-workspace session metadata (sessions.json, <sessionId>.json)
   <sha256[:32](workspace)>/...  # per-execution JSON files with tool calls and usage
+~/.kiro/sessions/               # CLI (v2) and unified (v3) sessions
 ```
 
 No credentials are sent off-machine; everything stays on local disk.
 
-### Build a production bundle
-
-```bash
-pnpm build        # emits ./dist
-pnpm preview      # serves ./dist on http://localhost:4173
-```
-
-In production you still need `pnpm server` running (or the Express code
-ported behind whatever reverse proxy you prefer) so the UI can fetch
-session data.
-
-### Linting
-
-```bash
-pnpm lint
-```
-
-ESLint is configured in `eslint.config.js` with TypeScript + React hooks
-rules. Prettier is not currently wired up.
-
 ---
 
-## Desktop version (Tauri)
+## Desktop app (Tauri)
 
-A fully offline native app — no Express backend. The Rust side
-(`src-tauri/src/sessions/`) reads the same JSON files and hashed workspace
-directories directly, mirroring `server/index.ts`.
+The Rust side (`src-tauri/src/sessions/`) reads the session JSON files and
+hashed workspace directories directly.
 
 ### Requirements
 
-- Everything the web version needs (Node 20+, pnpm)
+- Node 20+ and [pnpm](https://pnpm.io/) (via `corepack enable` or `brew install pnpm`)
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
 - Platform-specific Tauri prerequisites — see the
   [Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/)
@@ -121,6 +72,16 @@ Produces a native installer under `src-tauri/target/release/bundle/`:
 `.rpm` on Linux. Tauri only cross-bundles for the OS it's running on, so
 building all three platforms' installers requires running `tauri build` on
 each OS (see the CI workflow below for how this repo automates that).
+
+### Linting
+
+```bash
+pnpm lint
+```
+
+ESLint is configured in `eslint.config.js` with TypeScript + React hooks
+rules. Prettier is not currently wired up.
+
 
 ### Cross-platform releases via CI
 

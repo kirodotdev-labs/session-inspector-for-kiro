@@ -1,43 +1,33 @@
 /**
- * Thin data-fetching layer used by App.tsx and Dashboard.tsx. Uses Tauri's
- * `invoke()` to call into the Rust commands (see `src-tauri/src/commands.rs`)
- * when running inside the Tauri shell, and falls back to `fetch()` against
- * the Express dev server (`server/index.ts`) when running in a plain browser
- * via `vite dev` — this keeps `pnpm run start` working for day-to-day
- * frontend iteration without requiring the Tauri toolchain.
+ * Thin data-fetching layer used by App.tsx and Dashboard.tsx. Calls into the
+ * Rust backend (see `src-tauri/src/commands.rs`) via Tauri's `invoke()`. The
+ * app is desktop-only; there is no web/HTTP backend.
  */
+import { invoke } from "@tauri-apps/api/core";
 import type { Workspace, SessionDetail, Source } from "../App";
 
-const API = "http://localhost:3001/api";
-
-function isTauri(): boolean {
+/**
+ * True when running inside the Tauri desktop shell. The app is desktop-only,
+ * but the UI can still be loaded in a plain browser via `vite dev`/`preview`
+ * where the Tauri APIs are absent — features that call native commands guard
+ * on this to fail gracefully instead of throwing.
+ */
+export function isDesktop(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 export async function listWorkspaces(): Promise<Workspace[]> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<Workspace[]>("list_workspaces");
-  }
-  const r = await fetch(`${API}/workspaces`);
-  return r.json();
+  return invoke<Workspace[]>("list_workspaces");
 }
 
 export async function getSessionDetail(
   workspaceId: string,
   sessionId: string,
 ): Promise<SessionDetail> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<SessionDetail>("get_session_detail", {
-      workspaceId,
-      sessionId,
-    });
-  }
-  const r = await fetch(
-    `${API}/workspaces/${encodeURIComponent(workspaceId)}/sessions/${sessionId}`,
-  );
-  return r.json();
+  return invoke<SessionDetail>("get_session_detail", {
+    workspaceId,
+    sessionId,
+  });
 }
 
 // Dashboard payload shape is defined and typed locally in Dashboard.tsx
@@ -45,22 +35,12 @@ export async function getSessionDetail(
 // the caller supplies that shape without a redundant duplicate type here.
 
 export async function getDashboard<T = unknown>(): Promise<T> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<T>("get_dashboard");
-  }
-  const r = await fetch(`${API}/dashboard`);
-  return r.json();
+  return invoke<T>("get_dashboard");
 }
 
 /** Dashboard scoped to Unified (shared IDE+CLI format) sessions only. */
 export async function getUnifiedDashboard<T = unknown>(): Promise<T> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<T>("get_unified_dashboard");
-  }
-  const r = await fetch(`${API}/unified-dashboard`);
-  return r.json();
+  return invoke<T>("get_unified_dashboard");
 }
 
 /**
@@ -72,14 +52,7 @@ export async function getWorkspaceDashboard<T = unknown>(
   path: string,
   source?: string,
 ): Promise<T> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<T>("get_workspace_dashboard", { path, source });
-  }
-  let url = `${API}/workspace-dashboard?path=${encodeURIComponent(path)}`;
-  if (source) url += `&source=${encodeURIComponent(source)}`;
-  const r = await fetch(url);
-  return r.json();
+  return invoke<T>("get_workspace_dashboard", { path, source });
 }
 
 /**
@@ -99,53 +72,28 @@ export interface AnalysisRecord {
  * Run a headless Kiro analysis over the given window ("day" | "week" |
  * "month"). This spawns the local `kiro-cli` and a Rust-hosted stats MCP
  * server, persists the resulting HTML report, and returns its stored record.
- * Only available in the desktop (Tauri) app — the browser cannot launch a
- * subprocess.
  */
 export async function runAnalysis(
   window: "day" | "week" | "month",
   voice?: "default" | "blunt" | "neutral",
   cliPath?: string,
 ): Promise<AnalysisRecord> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<AnalysisRecord>("run_analysis", { window, voice, cliPath });
-  }
-  throw new Error(
-    "Session analysis runs the local kiro-cli and is only available in the desktop app.",
-  );
+  return invoke<AnalysisRecord>("run_analysis", { window, voice, cliPath });
 }
 
 /** List all stored analyses, newest first. */
 export async function listAnalyses(): Promise<AnalysisRecord[]> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<AnalysisRecord[]>("list_analyses");
-  }
-  return [];
+  return invoke<AnalysisRecord[]>("list_analyses");
 }
 
 /** Open a stored analysis's HTML report in the default browser. */
 export async function openAnalysis(id: string): Promise<void> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<void>("open_analysis", { id });
-  }
-  throw new Error("Opening reports is only available in the desktop app.");
+  return invoke<void>("open_analysis", { id });
 }
 
 /** Delete a stored analysis (HTML + metadata) by id. */
 export async function deleteAnalysis(id: string): Promise<void> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<void>("delete_analysis", { id });
-  }
-  throw new Error("Deleting reports is only available in the desktop app.");
-}
-
-/** True when running inside the Tauri desktop shell (analysis requires it). */
-export function isDesktop(): boolean {
-  return isTauri();
+  return invoke<void>("delete_analysis", { id });
 }
 
 /** One highlighted snippet from a matching message (HTML `<mark>` markers). */
@@ -188,7 +136,7 @@ export interface IndexStats {
 /**
  * Free-text search across indexed sessions. Results are grouped per session,
  * ranked by relevance, with highlighted snippets. Sessions deleted from disk
- * after indexing remain searchable (`onDisk: false`). Desktop-only.
+ * after indexing remain searchable (`onDisk: false`).
  */
 export async function searchSessions(
   query: string,
@@ -199,36 +147,24 @@ export async function searchSessions(
     offset?: number;
   } = {},
 ): Promise<SearchResults> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<SearchResults>("search_sessions", {
-      query,
-      source: opts.source,
-      workspacePath: opts.workspacePath,
-      limit: opts.limit,
-      offset: opts.offset,
-    });
-  }
-  throw new Error("Session search is only available in the desktop app.");
+  return invoke<SearchResults>("search_sessions", {
+    query,
+    source: opts.source,
+    workspacePath: opts.workspacePath,
+    limit: opts.limit,
+    offset: opts.offset,
+  });
 }
 
 /**
  * Bring the search index up to date (incremental), or fully rebuild it when
- * `full` is true. Returns the resulting index statistics. Desktop-only.
+ * `full` is true. Returns the resulting index statistics.
  */
 export async function reindexSessions(full = false): Promise<IndexStats> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<IndexStats>("reindex_sessions", { full });
-  }
-  throw new Error("Reindexing is only available in the desktop app.");
+  return invoke<IndexStats>("reindex_sessions", { full });
 }
 
-/** Current search index statistics. Desktop-only. */
+/** Current search index statistics. */
 export async function searchIndexStats(): Promise<IndexStats> {
-  if (isTauri()) {
-    const { invoke } = await import("@tauri-apps/api/core");
-    return invoke<IndexStats>("search_index_stats");
-  }
-  throw new Error("Search index stats are only available in the desktop app.");
+  return invoke<IndexStats>("search_index_stats");
 }
