@@ -402,25 +402,46 @@ export function SessionView({ session }: Props) {
               ) : null}
             </div>
 
-            {msg.content && (
-              <div className="whitespace-pre-wrap break-words text-[var(--text-primary)]">
-                {msg.content}
+            {msg.blocks && msg.blocks.length > 0 ? (
+              <div className="space-y-1">
+                {msg.blocks.map((block, j) =>
+                  block.type === "text" ? (
+                    <div
+                      key={j}
+                      className="whitespace-pre-wrap break-words text-[var(--text-primary)]"
+                    >
+                      {block.text}
+                    </div>
+                  ) : (
+                    <ActionBlock key={j} action={block} />
+                  ),
+                )}
               </div>
+            ) : (
+              <>
+                {msg.content && (
+                  <div className="whitespace-pre-wrap break-words text-[var(--text-primary)]">
+                    {msg.content}
+                  </div>
+                )}
+
+                {msg.actions && msg.actions.length > 0 && (
+                  <div className="mt-2 space-y-0.5">
+                    {msg.actions.map((action, j) => (
+                      <ActionBlock key={j} action={action} />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
 
-            {msg.actions && msg.actions.length > 0 && (
-              <div className="mt-2 space-y-0.5">
-                {msg.actions.map((action, j) => (
-                  <ActionBlock key={j} action={action} />
-                ))}
-              </div>
-            )}
-
-            {!msg.content && (!msg.actions || msg.actions.length === 0) && (
-              <span className="italic text-[var(--text-secondary)]">
-                (empty)
-              </span>
-            )}
+            {!msg.content &&
+              (!msg.actions || msg.actions.length === 0) &&
+              (!msg.blocks || msg.blocks.length === 0) && (
+                <span className="italic text-[var(--text-secondary)]">
+                  (empty)
+                </span>
+              )}
           </div>
         ))}
       </div>

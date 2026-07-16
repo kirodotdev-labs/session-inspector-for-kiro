@@ -67,7 +67,38 @@ pub struct Action {
     pub output: Option<Value>,
 }
 
+/// One ordered unit of an assistant turn, for interleaved rendering — a
+/// text chunk or a tool call/reasoning step, in the order they were
+/// actually emitted. This is the structure the UI renders from; `content`/
+/// `actions` on `HistoryMsg` below remain the flattened, order-independent
+/// view used by consumers that don't care about interleaving (search
+/// indexing, tool-usage analytics, dashboard stats).
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum Block {
+    Text {
+        text: String,
+    },
+    Action {
+        #[serde(flatten)]
+        action: Action,
+    },
+}
+
+/// Internal bookkeeping for the order text/tool-call blocks are encountered
+/// in while parsing a turn — never serialized. `ActionIdx` is an index into
+/// `HistoryMsg::actions` rather than a copy of the `Action`, since a
+/// `tool_use`'s `Action` is typically mutated in place afterwards (e.g. once
+/// its `tool_result` arrives); resolving through the index at
+/// `finalize_blocks` time guarantees `blocks` always reflects the final
+/// state of `actions`.
+#[derive(Debug, Clone)]
+pub enum BlockOrder {
+    Text(String),
+    ActionIdx(usize),
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct HistoryMsg {
     pub role: String,
     pub content: String,
@@ -75,6 +106,64 @@ pub struct HistoryMsg {
     pub execution_id: Option<String>,
     pub actions: Vec<Action>,
     pub cost: f64,
+    /// Ordered view of this turn's text/tool-call blocks, interleaved in
+    /// the order they actually happened — see `Block`. Populated by
+    /// `finalize_blocks()`; empty for turns that never call it (e.g. plain
+    /// user messages, or sources — like the IDE format — whose on-disk
+    /// shape doesn't preserve interleaving to begin with).
+    pub blocks: Vec<Block>,
+    #[serde(skip)]
+    pub block_order: Vec<BlockOrder>,
+}
+
+impl HistoryMsg {
+    /// Appends text to both the flattened `content` string (joined with
+    /// `\n`) and `block_order`, merging into the previous block if it was
+    /// also plain text so a run of consecutive text chunks (e.g. several
+    /// API response fragments) stays one block — a tool call in between
+    /// starts a fresh text block instead of merging across it.
+    pub fn push_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.content = if self.content.is_empty() {
+            text.to_string()
+        } else {
+            format!("{}\n{}", self.content, text)
+        };
+        if let Some(BlockOrder::Text(s)) = self.block_order.last_mut() {
+            s.push('\n');
+            s.push_str(text);
+        } else {
+            self.block_order.push(BlockOrder::Text(text.to_string()));
+        }
+    }
+
+    /// Pushes a tool-call/reasoning `Action` and records its position in
+    /// `block_order`. Returns its index in `actions`, for callers that need
+    /// to look it up again later (e.g. to fill in a `tool_result`).
+    pub fn push_action(&mut self, action: Action) -> usize {
+        let idx = self.actions.len();
+        self.actions.push(action);
+        self.block_order.push(BlockOrder::ActionIdx(idx));
+        idx
+    }
+
+    /// Materializes `blocks` from `block_order` and the current `actions`.
+    /// Call once all of this turn's `tool_result`s have been folded into
+    /// `actions` in place, so `blocks` reflects their final state.
+    pub fn finalize_blocks(&mut self) {
+        self.blocks = self
+            .block_order
+            .iter()
+            .filter_map(|o| match o {
+                BlockOrder::Text(s) => Some(Block::Text { text: s.clone() }),
+                BlockOrder::ActionIdx(i) => {
+                    self.actions.get(*i).cloned().map(|action| Block::Action { action })
+                }
+            })
+            .collect();
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

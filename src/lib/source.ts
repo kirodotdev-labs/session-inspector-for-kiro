@@ -40,3 +40,10 @@ export const SOURCE_FILL_CLASS: Record<Source, string> = {
   cli: "bg-emerald-500",
   unified: "bg-violet-500",
 };
+
+/** Tint classes for a selected item in a list (sidebar sessions, etc.). */
+export const SOURCE_SELECTED_CLASS: Record<Source, string> = {
+  ide: "bg-[var(--accent)]/15 text-[var(--accent)]",
+  cli: "bg-emerald-500/15 text-emerald-300",
+  unified: "bg-violet-500/15 text-violet-300",
+};

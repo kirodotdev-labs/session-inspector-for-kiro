@@ -1,14 +1,9 @@
 import { useMemo, useState } from "react";
-import {
-  ChevronRight,
-  FolderOpen,
-  MessageSquare,
-  RefreshCw,
-} from "lucide-react";
+import { ChevronRight, FolderOpen, RefreshCw } from "lucide-react";
 import { clsx } from "clsx";
 import type { Workspace } from "../App";
 import type { Source } from "../lib/source";
-import { ALL_SOURCES, SOURCE_LABELS, SOURCE_TEXT_CLASS } from "../lib/source";
+import { ALL_SOURCES, SOURCE_LABELS, SOURCE_SELECTED_CLASS } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
 import { useSettings } from "../lib/useSettings";
 
@@ -24,6 +19,56 @@ interface Props {
 
 type SourceFilter = "all" | Source;
 
+/** A session as shown in the sidebar, tagged with the specific per-source
+ * workspace id needed to load it (a single real-world workspace can have
+ * sessions from more than one source — IDE, legacy CLI, Unified — each
+ * with its own backing workspace id). */
+interface SidebarSession {
+  id: string;
+  title: string;
+  date: number;
+  source: Source;
+  workspaceId: string;
+}
+
+/** One real-world workspace (grouped by path), merged across every source
+ * that has sessions in it. */
+interface MergedWorkspace {
+  key: string;
+  path: string;
+  name: string;
+  /** Every underlying per-source workspace id folded into this group —
+   * used to resolve "is this group the selected one" and as a stand-in id
+   * when the dashboard is opened for the whole group. */
+  ids: string[];
+  sessions: SidebarSession[];
+}
+
+/** Group raw (per-source) workspaces into one entry per real-world path, so
+ * a project visited via more than one source shows as a single workspace
+ * with each session tagged by its own source instead of as separate
+ * per-source workspace entries. Sorted by most recently active first. */
+function mergeWorkspaces(workspaces: Workspace[]): MergedWorkspace[] {
+  const byPath = new Map<string, MergedWorkspace>();
+  for (const ws of workspaces) {
+    const key = ws.path || ws.name;
+    let merged = byPath.get(key);
+    if (!merged) {
+      merged = { key, path: ws.path, name: ws.name, ids: [], sessions: [] };
+      byPath.set(key, merged);
+    }
+    merged.ids.push(ws.id);
+    for (const s of ws.sessions) {
+      merged.sessions.push({ ...s, workspaceId: ws.id });
+    }
+  }
+  return Array.from(byPath.values()).sort((a, b) => {
+    const aLatest = a.sessions.reduce((max, s) => Math.max(max, s.date), 0);
+    const bLatest = b.sessions.reduce((max, s) => Math.max(max, s.date), 0);
+    return bLatest - aLatest;
+  });
+}
+
 export function Sidebar({
   workspaces,
   selectedSession,
@@ -37,10 +82,10 @@ export function Sidebar({
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const { showNonUnified } = useSettings();
 
-  const toggle = (id: string) => {
+  const toggle = (key: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      next.has(key) ? next.delete(key) : next.add(key);
       return next;
     });
   };
@@ -64,21 +109,28 @@ export function Sidebar({
     return workspaces;
   }, [workspaces, showNonUnified]);
 
-  const visibleWorkspaces = useMemo(() => {
-    if (!showNonUnified || sourceFilter === "all") return settingScopedWorkspaces;
-    return settingScopedWorkspaces.filter((w) => w.source === sourceFilter);
-  }, [settingScopedWorkspaces, sourceFilter, showNonUnified]);
+  // Merge across sources first (one entry per real workspace path), then
+  // apply the source filter to each group's *sessions* — a workspace with
+  // sessions from more than one source should stay visible (showing just
+  // that source's sessions) rather than disappearing entirely when filtered.
+  const mergedWorkspaces = useMemo(
+    () => mergeWorkspaces(settingScopedWorkspaces),
+    [settingScopedWorkspaces],
+  );
 
-  const grouped = useMemo(() => {
-    const ide = visibleWorkspaces.filter((w) => w.source === "ide");
-    const cli = visibleWorkspaces.filter((w) => w.source === "cli");
-    const unified = visibleWorkspaces.filter((w) => w.source === "unified");
-    return { ide, cli, unified };
-  }, [visibleWorkspaces]);
+  const visibleWorkspaces = useMemo(() => {
+    if (!showNonUnified || sourceFilter === "all") return mergedWorkspaces;
+    return mergedWorkspaces
+      .map((ws) => ({
+        ...ws,
+        sessions: ws.sessions.filter((s) => s.source === sourceFilter),
+      }))
+      .filter((ws) => ws.sessions.length > 0);
+  }, [mergedWorkspaces, sourceFilter, showNonUnified]);
 
   const totalWorkspaces = visibleWorkspaces.length;
   const totalSessions = visibleWorkspaces.reduce(
-    (sum, w) => sum + w.sessionCount,
+    (sum, w) => sum + w.sessions.length,
     0,
   );
 
@@ -145,105 +197,86 @@ export function Sidebar({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
-        {ALL_SOURCES.map((source) => {
-          const list = grouped[source];
-          if (list.length === 0) return null;
-          // When non-unified sessions are hidden, there's only ever one
-          // source (unified) in play, so the group header is redundant —
-          // sessions are shown directly at the root.
-          const showGroupHeader = showNonUnified;
+      <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+        {visibleWorkspaces.map((ws) => {
+          // Distinct sources present in this workspace, shown as a small
+          // icon strip on the workspace row. Redundant (and suppressed)
+          // when non-unified sessions are hidden, since only unified is
+          // ever in play at that point.
+          const sourcesPresent = showNonUnified
+            ? ALL_SOURCES.filter((s) => ws.sessions.some((sess) => sess.source === s))
+            : [];
+          const isSelected = ws.ids.includes(selectedWorkspaceId ?? "");
           return (
-            <div key={source}>
-              {showGroupHeader && (
-                <div className="flex items-center gap-1.5 px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-[var(--text-secondary)]">
-                  <SourceIcon source={source} />
-                  <span className={SOURCE_TEXT_CLASS[source]}>
-                    {SOURCE_LABELS[source]}
+            <div key={ws.key}>
+              <div
+                className={clsx(
+                  "w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-colors",
+                  isSelected
+                    ? "bg-[var(--bg-tertiary)]"
+                    : "hover:bg-[var(--bg-tertiary)]",
+                )}
+              >
+                <button
+                  onClick={() => toggle(ws.key)}
+                  aria-label="Toggle sessions"
+                  className="shrink-0 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  <ChevronRight
+                    size={14}
+                    className={clsx(
+                      "transition-transform",
+                      expanded.has(ws.key) && "rotate-90",
+                    )}
+                  />
+                </button>
+                <button
+                  onClick={() => onSelectWorkspace(ws.ids[0])}
+                  title="Show workspace dashboard"
+                  className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                >
+                  <FolderOpen
+                    size={14}
+                    className="text-[var(--text-secondary)] shrink-0"
+                  />
+                  <span className="truncate flex-1">{ws.name}</span>
+                  {sourcesPresent.length > 0 && (
+                    <span className="flex items-center gap-0.5 shrink-0">
+                      {sourcesPresent.map((s) => (
+                        <SourceIcon key={s} source={s} size={10} />
+                      ))}
+                    </span>
+                  )}
+                  <span className="text-xs text-[var(--text-secondary)] tabular-nums">
+                    {ws.sessions.length}
                   </span>
-                  <span className="ml-auto text-[var(--text-secondary)]">
-                    {list.length}
-                  </span>
-                </div>
-              )}
-              <div className="space-y-0.5">
-                {list.map((ws) => (
-                  <div key={ws.id}>
-                    <div
-                      className={clsx(
-                        "w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm transition-colors",
-                        selectedWorkspaceId === ws.id
-                          ? "bg-[var(--bg-tertiary)]"
-                          : "hover:bg-[var(--bg-tertiary)]",
-                      )}
-                    >
+                </button>
+              </div>
+              {expanded.has(ws.key) && (
+                <div className="ml-5 pl-2 border-l border-[var(--border)] space-y-0.5 mt-0.5">
+                  {ws.sessions
+                    .slice()
+                    .sort((a, b) => b.date - a.date)
+                    .map((s) => (
                       <button
-                        onClick={() => toggle(ws.id)}
-                        aria-label="Toggle sessions"
-                        className="shrink-0 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-                      >
-                        <ChevronRight
-                          size={14}
-                          className={clsx(
-                            "transition-transform",
-                            expanded.has(ws.id) && "rotate-90",
-                          )}
-                        />
-                      </button>
-                      <button
-                        onClick={() => onSelectWorkspace(ws.id)}
-                        title="Show workspace dashboard"
-                        className="flex items-center gap-2 flex-1 min-w-0 text-left"
-                      >
-                        {source === "ide" ? (
-                          <FolderOpen
-                            size={14}
-                            className="text-[var(--accent)] shrink-0"
-                          />
-                        ) : (
-                          <SourceIcon source={source} size={14} />
+                        key={`${s.workspaceId}:${s.id}`}
+                        onClick={() => onSelect(s.workspaceId, s.id)}
+                        title={`${SOURCE_LABELS[s.source]} session`}
+                        className={clsx(
+                          "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-xs transition-colors",
+                          selectedSession?.sessionId === s.id
+                            ? SOURCE_SELECTED_CLASS[s.source]
+                            : "hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)]",
                         )}
-                        <span className="truncate flex-1">{ws.name}</span>
-                        <span className="text-xs text-[var(--text-secondary)] tabular-nums">
-                          {ws.sessionCount}
+                      >
+                        <SourceIcon source={s.source} size={12} />
+                        <span className="truncate">
+                          {s.title || "Untitled session"}
                         </span>
                       </button>
-                    </div>
-                    {expanded.has(ws.id) && (
-                      <div className="ml-5 pl-2 border-l border-[var(--border)] space-y-0.5 mt-0.5">
-                        {ws.sessions
-                          .slice()
-                          .sort((a, b) => b.date - a.date)
-                          .map((s) => (
-                            <button
-                              key={s.id}
-                              onClick={() => onSelect(ws.id, s.id)}
-                              className={clsx(
-                                "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-xs transition-colors",
-                                selectedSession?.sessionId === s.id
-                                  ? source === "cli"
-                                    ? "bg-emerald-500/15 text-emerald-300"
-                                    : source === "unified"
-                                      ? "bg-violet-500/15 text-violet-300"
-                                      : "bg-[var(--accent)]/15 text-[var(--accent)]"
-                                  : "hover:bg-[var(--bg-tertiary)] text-[var(--text-secondary)]",
-                              )}
-                            >
-                              {source === "ide" ? (
-                                <MessageSquare size={12} className="shrink-0" />
-                              ) : (
-                                <SourceIcon source={source} size={12} />
-                              )}
-                              <span className="truncate">
-                                {s.title || "Untitled session"}
-                              </span>
-                            </button>
-                          ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                    ))}
+                </div>
+              )}
             </div>
           );
         })}

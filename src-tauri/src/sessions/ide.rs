@@ -249,17 +249,30 @@ pub fn get_ide_session(
                 }
             }
 
-            history.push(HistoryMsg {
+            let mut hist_msg = HistoryMsg {
                 role: msg
                     .get("role")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string(),
-                content,
                 execution_id,
-                actions,
                 cost,
-            });
+                ..Default::default()
+            };
+            // The IDE's own storage format doesn't preserve step-level
+            // interleaving between this text and `actions` (they come from
+            // two separate stores — `message.content` vs. a per-execution
+            // actions log keyed only by `executionId`, with no shared
+            // ordering field) — text-then-actions here just mirrors the
+            // long-standing display order for this source.
+            if !content.is_empty() {
+                hist_msg.push_text(&content);
+            }
+            for action in actions {
+                hist_msg.push_action(action);
+            }
+            hist_msg.finalize_blocks();
+            history.push(hist_msg);
         }
     }
 

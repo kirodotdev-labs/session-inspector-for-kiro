@@ -37,6 +37,13 @@ export interface Action {
   output?: any;
 }
 
+/** One ordered unit of an assistant turn — a text chunk or a tool call/
+ * reasoning step, in the order they actually happened. Renders from this
+ * instead of `content`/`actions` (which are flattened, order-independent
+ * views of the same data) so interleaved text/tool-call turns display in
+ * their original order rather than all text followed by all tool calls. */
+export type Block = { type: "text"; text: string } | ({ type: "action" } & Action);
+
 export interface SessionDetail {
   source: Source;
   sessionId: string;
@@ -57,6 +64,10 @@ export interface SessionDetail {
     content: string;
     executionId?: string;
     actions?: Action[];
+    /** Ordered view of this turn's blocks — see `Block`. Empty for turns
+     * that don't carry any (plain user messages) or for sources whose
+     * on-disk format doesn't preserve interleaving. */
+    blocks?: Block[];
     cost?: number;
   }[];
 }

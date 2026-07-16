@@ -449,9 +449,7 @@ fn get_cli_v2_session(paths: &Paths, session_id: &str) -> Result<SessionDetail, 
                     history.push(HistoryMsg {
                         role: "user".to_string(),
                         content: text,
-                        execution_id: None,
-                        actions: vec![],
-                        cost: 0.0,
+                        ..Default::default()
                     });
                 }
                 "AssistantMessage" => {
@@ -464,10 +462,8 @@ fn get_cli_v2_session(paths: &Paths, session_id: &str) -> Result<SessionDetail, 
                         turn_idx += 1;
                         history.push(HistoryMsg {
                             role: "assistant".to_string(),
-                            content: String::new(),
-                            execution_id: None,
-                            actions: vec![],
                             cost,
+                            ..Default::default()
                         });
                     }
                     let last_idx = history.len() - 1;
@@ -476,21 +472,14 @@ fn get_cli_v2_session(paths: &Paths, session_id: &str) -> Result<SessionDetail, 
                         if ck == "text" {
                             if let Some(text) = c.get("data").and_then(|v| v.as_str()) {
                                 if !text.is_empty() {
-                                    let last = &mut history[last_idx];
-                                    last.content = if last.content.is_empty() {
-                                        text.to_string()
-                                    } else {
-                                        format!("{}\n{}", last.content, text)
-                                    };
+                                    history[last_idx].push_text(text);
                                 }
                             }
                         } else if ck == "toolUse" {
                             let tu = c.get("data").cloned().unwrap_or(Value::Null);
                             let name = tu.get("name").and_then(|v| v.as_str()).unwrap_or("");
                             let input = tu.get("input").cloned().unwrap_or(json!({}));
-                            let last = &mut history[last_idx];
-                            let action_index = last.actions.len();
-                            last.actions.push(Action {
+                            let action_index = history[last_idx].push_action(Action {
                                 action_type: normalize_cli_tool_type(name),
                                 raw_tool_name: Some(name.to_string()),
                                 action_state: Some("Pending".to_string()),
@@ -570,6 +559,10 @@ fn get_cli_v2_session(paths: &Paths, session_id: &str) -> Result<SessionDetail, 
                 _ => {}
             }
         }
+    }
+
+    for msg in history.iter_mut() {
+        msg.finalize_blocks();
     }
 
     let message_count = history.len();
@@ -662,10 +655,9 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
         }
         history.push(HistoryMsg {
             role: "assistant".to_string(),
-            content: String::new(),
             execution_id: exec_id.clone(),
-            actions: vec![],
             cost,
+            ..Default::default()
         });
         let idx = history.len() - 1;
         *cur_assistant_idx = Some(idx);
@@ -690,9 +682,7 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
                 history.push(HistoryMsg {
                     role: "user".to_string(),
                     content: content.to_string(),
-                    execution_id: None,
-                    actions: vec![],
-                    cost: 0.0,
+                    ..Default::default()
                 });
                 cur_assistant_idx = None;
                 cur_exec_id = None;
@@ -708,12 +698,7 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
                 );
                 if let Some(text) = p.get("content").and_then(|v| v.as_str()) {
                     if !text.is_empty() {
-                        let msg = &mut history[idx];
-                        msg.content = if msg.content.is_empty() {
-                            text.to_string()
-                        } else {
-                            format!("{}\n{}", msg.content, text)
-                        };
+                        history[idx].push_text(text);
                     }
                 }
             }
@@ -727,8 +712,7 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
                     exec_id.clone(),
                 );
                 let name = p.get("toolName").and_then(|v| v.as_str()).unwrap_or("");
-                let action_index = history[idx].actions.len();
-                history[idx].actions.push(Action {
+                let action_index = history[idx].push_action(Action {
                     action_type: normalize_cli_tool_type(name),
                     raw_tool_name: Some(name.to_string()),
                     action_state: Some("Pending".to_string()),
@@ -781,7 +765,7 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
                     parent_exec_id,
                 );
                 let sub_agent_name = p.get("subAgentName").and_then(|v| v.as_str()).unwrap_or("");
-                history[idx].actions.push(Action {
+                history[idx].push_action(Action {
                     action_type: "subagent".to_string(),
                     raw_tool_name: Some(
                         if sub_agent_name.is_empty() {
@@ -800,6 +784,10 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
             }
             _ => {}
         }
+    }
+
+    for msg in history.iter_mut() {
+        msg.finalize_blocks();
     }
 
     let message_count = history.len();
