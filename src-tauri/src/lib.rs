@@ -6,7 +6,7 @@ mod sessions;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 /// Headless entry point: run the stdio MCP server (spawned by kiro-cli).
 pub fn run_mcp_server() {
@@ -39,7 +39,7 @@ pub fn run_analysis_cli(window: &str, cli_path: Option<&str>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
+  let app = tauri::Builder::default()
     .plugin(tauri_plugin_process::init())
     .plugin(tauri_plugin_updater::Builder::new().build())
     .setup(|app| {
@@ -124,6 +124,21 @@ pub fn run() {
       commands::reindex_sessions,
       commands::search_index_stats,
     ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application");
+
+  app.run(|app_handle, event| {
+    // On macOS, clicking the Dock icon while the window is hidden (rather
+    // than quit — see the tray/CloseRequested handling above) doesn't
+    // re-show it by default; the OS instead calls
+    // `applicationShouldHandleReopen`, which Tauri surfaces as this event.
+    // Without handling it, clicking the Dock icon with no visible windows
+    // does nothing.
+    if let RunEvent::Reopen { .. } = event {
+      if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+      }
+    }
+  });
 }
