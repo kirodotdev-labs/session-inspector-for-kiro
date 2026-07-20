@@ -65,6 +65,13 @@ pub struct Action {
     pub input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<Value>,
+    /// Present only for `actionType: "subagent"` — the id of the sub-agent's
+    /// own session, i.e. the `{subSessionId}` in
+    /// `{parentSessionDir}/sub-executions/{subSessionId}.jsonl`. Lets the UI
+    /// fetch and expand that sub-agent's own transcript on demand via
+    /// `get_subagent_trace` instead of just showing it as an opaque step.
+    #[serde(rename = "subSessionId", skip_serializing_if = "Option::is_none")]
+    pub sub_session_id: Option<String>,
 }
 
 /// One ordered unit of an assistant turn, for interleaved rendering — a

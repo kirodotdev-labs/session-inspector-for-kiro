@@ -1,4 +1,4 @@
-use crate::sessions::cli::{get_cli_session, list_cli_workspaces};
+use crate::sessions::cli::{get_cli_session, get_subagent_trace, list_cli_workspaces};
 use crate::sessions::dashboard::compute_dashboard;
 use crate::sessions::ide::{get_ide_session, list_ide_workspaces};
 use crate::sessions::paths;
@@ -42,6 +42,18 @@ pub fn get_session_detail(
         let raw_id = workspace_id.strip_prefix("ide:").unwrap_or(&workspace_id);
         get_ide_session(&paths, raw_id, &session_id)
     }
+}
+
+/// Loads a sub-agent's own transcript, dispatched from `session_id`'s
+/// "subagent" action (see `Action.subSessionId`). Only Unified (v3)
+/// sessions can have these — see `cli::get_subagent_trace`.
+#[tauri::command]
+pub fn get_subagent_session(
+    session_id: String,
+    sub_session_id: String,
+) -> Result<SessionDetail, String> {
+    let paths = paths::resolve();
+    get_subagent_trace(&paths, &session_id, &sub_session_id)
 }
 
 #[tauri::command]

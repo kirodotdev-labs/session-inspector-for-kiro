@@ -117,6 +117,7 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       commands::list_workspaces,
       commands::get_session_detail,
+      commands::get_subagent_session,
       commands::get_dashboard,
       commands::get_unified_dashboard,
       commands::get_workspace_dashboard,

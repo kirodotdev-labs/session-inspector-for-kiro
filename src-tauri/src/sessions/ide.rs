@@ -98,6 +98,7 @@ fn extract_actions(execution_data: &Value) -> Vec<Action> {
                 .map(|s| s.to_string()),
             input: a.get("input").cloned(),
             output: a.get("output").cloned(),
+            sub_session_id: None,
         })
         .collect()
 }

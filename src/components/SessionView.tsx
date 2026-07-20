@@ -17,14 +17,17 @@ import {
   Clock,
   Copy,
   Check,
+  LoaderCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { useEffect, useRef, useState } from "react";
-import type { SessionDetail, Action } from "../App";
+import type { SessionDetail, Action, Source } from "../App";
 import { formatDuration } from "../lib/format";
 import { SOURCE_BADGE_CLASS, SOURCE_DISPLAY_NAMES } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
 import { useSettings } from "../lib/useSettings";
+import { getSubagentSession } from "../lib/api";
 
 interface Props {
   session: SessionDetail;
@@ -135,10 +138,20 @@ function renderOutput(action: Action): React.ReactNode {
   );
 }
 
-function ActionBlock({ action }: { action: Action }) {
+function ActionBlock({
+  action,
+  sessionId,
+}: {
+  action: Action;
+  /** Root session id — needed only for `actionType: "subagent"`, to fetch
+   * its transcript (sub-agent traces live under the *root* session's
+   * directory, not any intermediate sub-agent's). */
+  sessionId?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const isThinking = action.actionType === "reasoning";
   const isSay = action.actionType === "say";
+  const isSubagent = action.actionType === "subagent";
   const message =
     typeof action.output === "object" && action.output !== null
       ? action.output.message
@@ -168,6 +181,16 @@ function ActionBlock({ action }: { action: Action }) {
           </div>
         )}
       </div>
+    );
+  }
+
+  if (isSubagent && action.subSessionId && sessionId) {
+    return (
+      <SubAgentAction
+        action={action}
+        sessionId={sessionId}
+        subSessionId={action.subSessionId}
+      />
     );
   }
 
@@ -212,6 +235,203 @@ function ActionBlock({ action }: { action: Action }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** A dispatched sub-agent task (e.g. the spec agent's `spec-task-execution`
+ * sub-agent). Expanding it fetches and renders that sub-agent's own
+ * transcript inline, via `get_subagent_session` — it's a fully separate
+ * on-disk file (`sub-executions/{subSessionId}.jsonl`), not part of the
+ * parent's own message stream, so it isn't available until fetched. */
+function SubAgentAction({
+  action,
+  sessionId,
+  subSessionId,
+}: {
+  action: Action;
+  sessionId: string;
+  subSessionId: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [trace, setTrace] = useState<SessionDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = () => {
+    setExpanded((e) => !e);
+    if (!trace && !loading) {
+      setLoading(true);
+      setError(null);
+      getSubagentSession(sessionId, subSessionId)
+        .then(setTrace)
+        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+        .finally(() => setLoading(false));
+    }
+  };
+
+  const prompt: string | undefined = action.input?.prompt;
+  const isError = action.actionState === "Error";
+  const response: string | undefined =
+    typeof action.output === "object" ? action.output?.response : undefined;
+  const errorMessage: string | undefined =
+    typeof action.output === "object" ? action.output?.errorMessage : undefined;
+
+  return (
+    <div className="my-1 border-l-2 border-indigo-500/40 pl-3">
+      <button
+        onClick={toggle}
+        className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-mono"
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <Layers size={12} />
+        <span className="truncate max-w-md">{describeAction(action)}</span>
+        {isError && (
+          <span className="ml-1 flex items-center gap-0.5 text-red-400">
+            <AlertTriangle size={10} /> Error
+          </span>
+        )}
+        {!action.actionState || action.actionState === "Pending" ? (
+          <span className="ml-1 text-yellow-500">(Pending)</span>
+        ) : null}
+      </button>
+      {expanded && (
+        <div className="mt-1 space-y-2">
+          {prompt && (
+            <div className="text-xs bg-[var(--bg-tertiary)] rounded p-2 text-[var(--text-secondary)] whitespace-pre-wrap">
+              {prompt}
+            </div>
+          )}
+          {loading && (
+            <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] py-1">
+              <LoaderCircle size={12} className="animate-spin" />
+              Loading sub-agent transcript...
+            </div>
+          )}
+          {error && (
+            <div className="text-xs text-red-400">
+              Failed to load sub-agent transcript: {error}
+            </div>
+          )}
+          {errorMessage && (
+            <div className="text-xs text-red-400 whitespace-pre-wrap">
+              {errorMessage}
+            </div>
+          )}
+          {trace && trace.history.length > 0 && (
+            <div className="border border-indigo-500/20 rounded-lg p-2 bg-indigo-500/5">
+              <MessageList
+                history={trace.history}
+                source={trace.source}
+                sessionId={sessionId}
+              />
+            </div>
+          )}
+          {trace && trace.history.length === 0 && !response && (
+            <div className="text-xs text-[var(--text-secondary)] italic">
+              (no transcript recorded)
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Renders a session's (or a sub-agent's own) message thread. Shared by the
+ * top-level `SessionView` and `SubAgentAction`'s nested transcript, so
+ * sub-agent transcripts render with identical formatting instead of a
+ * separate, drifting copy. */
+function MessageList({
+  history,
+  source,
+  sessionId,
+}: {
+  history: SessionDetail["history"];
+  source: Source;
+  sessionId: string;
+}) {
+  return (
+    <div className="space-y-4">
+      {history.map((msg, i) => (
+        <div
+          key={i}
+          className={clsx(
+            "rounded-lg p-4 text-sm leading-relaxed border",
+            msg.role === "user"
+              ? "bg-[var(--bg-tertiary)] border-[var(--border)]"
+              : source === "cli"
+                ? "bg-emerald-500/5 border-emerald-500/20"
+                : source === "unified"
+                  ? "bg-violet-500/5 border-violet-500/20"
+                  : "bg-[var(--bg-secondary)] border-[var(--border)]",
+          )}
+        >
+          <div className="flex items-center gap-2 mb-2 text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
+            {msg.role === "user" ? (
+              <User size={12} className="text-blue-400" />
+            ) : (
+              <Bot
+                size={12}
+                className={
+                  source === "cli"
+                    ? "text-emerald-400"
+                    : source === "unified"
+                      ? "text-violet-400"
+                      : "text-[var(--accent)]"
+                }
+              />
+            )}
+            {msg.role}
+            {msg.cost ? (
+              <span className="ml-auto font-normal normal-case tracking-normal text-[var(--text-secondary)]">
+                {msg.cost.toFixed(2)} credits
+              </span>
+            ) : null}
+          </div>
+
+          {msg.blocks && msg.blocks.length > 0 ? (
+            <div className="space-y-1">
+              {msg.blocks.map((block, j) =>
+                block.type === "text" ? (
+                  <div
+                    key={j}
+                    className="whitespace-pre-wrap break-words text-[var(--text-primary)]"
+                  >
+                    {block.text}
+                  </div>
+                ) : (
+                  <ActionBlock key={j} action={block} sessionId={sessionId} />
+                ),
+              )}
+            </div>
+          ) : (
+            <>
+              {msg.content && (
+                <div className="whitespace-pre-wrap break-words text-[var(--text-primary)]">
+                  {msg.content}
+                </div>
+              )}
+
+              {msg.actions && msg.actions.length > 0 && (
+                <div className="mt-2 space-y-0.5">
+                  {msg.actions.map((action, j) => (
+                    <ActionBlock key={j} action={action} sessionId={sessionId} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {!msg.content &&
+            (!msg.actions || msg.actions.length === 0) &&
+            (!msg.blocks || msg.blocks.length === 0) && (
+              <span className="italic text-[var(--text-secondary)]">
+                (empty)
+              </span>
+            )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -364,87 +584,11 @@ export function SessionView({ session }: Props) {
         </div>
       </div>
 
-      <div className="space-y-4">
-        {session.history.map((msg, i) => (
-          <div
-            key={i}
-            className={clsx(
-              "rounded-lg p-4 text-sm leading-relaxed border",
-              msg.role === "user"
-                ? "bg-[var(--bg-tertiary)] border-[var(--border)]"
-                : session.source === "cli"
-                  ? "bg-emerald-500/5 border-emerald-500/20"
-                  : session.source === "unified"
-                    ? "bg-violet-500/5 border-violet-500/20"
-                    : "bg-[var(--bg-secondary)] border-[var(--border)]",
-            )}
-          >
-            <div className="flex items-center gap-2 mb-2 text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
-              {msg.role === "user" ? (
-                <User size={12} className="text-blue-400" />
-              ) : (
-                <Bot
-                  size={12}
-                  className={
-                    session.source === "cli"
-                      ? "text-emerald-400"
-                      : session.source === "unified"
-                        ? "text-violet-400"
-                        : "text-[var(--accent)]"
-                  }
-                />
-              )}
-              {msg.role}
-              {msg.cost ? (
-                <span className="ml-auto font-normal normal-case tracking-normal text-[var(--text-secondary)]">
-                  {msg.cost.toFixed(2)} credits
-                </span>
-              ) : null}
-            </div>
-
-            {msg.blocks && msg.blocks.length > 0 ? (
-              <div className="space-y-1">
-                {msg.blocks.map((block, j) =>
-                  block.type === "text" ? (
-                    <div
-                      key={j}
-                      className="whitespace-pre-wrap break-words text-[var(--text-primary)]"
-                    >
-                      {block.text}
-                    </div>
-                  ) : (
-                    <ActionBlock key={j} action={block} />
-                  ),
-                )}
-              </div>
-            ) : (
-              <>
-                {msg.content && (
-                  <div className="whitespace-pre-wrap break-words text-[var(--text-primary)]">
-                    {msg.content}
-                  </div>
-                )}
-
-                {msg.actions && msg.actions.length > 0 && (
-                  <div className="mt-2 space-y-0.5">
-                    {msg.actions.map((action, j) => (
-                      <ActionBlock key={j} action={action} />
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-
-            {!msg.content &&
-              (!msg.actions || msg.actions.length === 0) &&
-              (!msg.blocks || msg.blocks.length === 0) && (
-                <span className="italic text-[var(--text-secondary)]">
-                  (empty)
-                </span>
-              )}
-          </div>
-        ))}
-      </div>
+      <MessageList
+        history={session.history}
+        source={session.source}
+        sessionId={session.sessionId}
+      />
     </div>
   );
 }

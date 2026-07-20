@@ -30,6 +30,21 @@ export async function getSessionDetail(
   });
 }
 
+/**
+ * Loads a sub-agent's own transcript — dispatched from a "subagent" Action's
+ * `subSessionId` (see `Block`/`Action` in App.tsx). Only Unified (v3)
+ * sessions can have these.
+ */
+export async function getSubagentSession(
+  sessionId: string,
+  subSessionId: string,
+): Promise<SessionDetail> {
+  return invoke<SessionDetail>("get_subagent_session", {
+    sessionId,
+    subSessionId,
+  });
+}
+
 // Dashboard payload shape is defined and typed locally in Dashboard.tsx
 // (it's a plain JSON-shaped aggregate); these functions are generic so
 // the caller supplies that shape without a redundant duplicate type here.

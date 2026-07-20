@@ -490,6 +490,7 @@ fn get_cli_v2_session(paths: &Paths, session_id: &str) -> Result<SessionDetail, 
                                 action_state: Some("Pending".to_string()),
                                 input: Some(input),
                                 output: None,
+                                sub_session_id: None,
                             });
                             if let Some(tool_use_id) = tu.get("toolUseId").and_then(|v| v.as_str()) {
                                 pending_tool_uses
@@ -589,15 +590,13 @@ fn get_cli_v2_session(paths: &Paths, session_id: &str) -> Result<SessionDetail, 
     })
 }
 
-fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
-    let messages_file = meta
-        .v3_dir
-        .as_ref()
-        .map(|d| d.join("messages.jsonl"))
-        .unwrap_or_default();
-
-    let mut records: Vec<Value> = Vec::new();
-    if let Ok(raw) = fs::read_to_string(&messages_file) {
+/// Reads a JSONL file into its records, skipping blank/unparsable lines.
+/// Both a top-level session's `messages.jsonl` and each sub-agent's own
+/// `sub-executions/{subSessionId}.jsonl` use this format (identical record
+/// envelope: `{"id", "timestamp", "payload": {"type": ..., ...}}`).
+fn read_jsonl_records(path: &Path) -> Vec<Value> {
+    let mut records = Vec::new();
+    if let Ok(raw) = fs::read_to_string(path) {
         for line in raw.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -607,10 +606,17 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
             }
         }
     }
+    records
+}
 
+/// Builds the interleaved message thread from a v3 JSONL record stream.
+/// Shared by `get_cli_v3_session` (the top-level session's `messages.jsonl`)
+/// and `get_subagent_trace` (a sub-agent's own `sub-executions/*.jsonl`) —
+/// same record shape, so the same parse applies to either.
+fn parse_v3_records(records: &[Value]) -> Vec<HistoryMsg> {
     // Pass 1: cost per executionId from usage_summary records.
     let mut cost_by_exec: HashMap<String, f64> = HashMap::new();
-    for rec in &records {
+    for rec in records {
         let p = rec.get("payload").cloned().unwrap_or(Value::Null);
         if p.get("type").and_then(|v| v.as_str()) == Some("usage_summary") {
             let mut c = 0.0;
@@ -628,6 +634,10 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
     // Pass 2: build the message thread.
     let mut history: Vec<HistoryMsg> = Vec::new();
     let mut tool_refs: HashMap<String, (usize, usize)> = HashMap::new();
+    // subSessionId -> the "subagent" Action created by that sub-agent's
+    // `sub_agent_start`, so the matching `sub_agent_complete` (which carries
+    // the same subSessionId, not a toolCallId) can fill in its result.
+    let mut sub_refs: HashMap<String, (usize, usize)> = HashMap::new();
     let mut cost_consumed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut cur_assistant_idx: Option<usize> = None;
     let mut cur_exec_id: Option<String> = None;
@@ -670,7 +680,7 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
         idx
     }
 
-    for rec in &records {
+    for rec in records {
         let p = rec.get("payload").cloned().unwrap_or(Value::Null);
         let ptype = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let exec_id: Option<String> = p
@@ -723,6 +733,7 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
                     action_state: Some("Pending".to_string()),
                     input: Some(p.get("args").cloned().unwrap_or(json!({}))),
                     output: None,
+                    sub_session_id: None,
                 });
                 if let Some(tool_call_id) = p.get("toolCallId").and_then(|v| v.as_str()) {
                     tool_refs.insert(tool_call_id.to_string(), (idx, action_index));
@@ -770,7 +781,11 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
                     parent_exec_id,
                 );
                 let sub_agent_name = p.get("subAgentName").and_then(|v| v.as_str()).unwrap_or("");
-                history[idx].push_action(Action {
+                let sub_session_id = p
+                    .get("subSessionId")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let action_index = history[idx].push_action(Action {
                     action_type: "subagent".to_string(),
                     raw_tool_name: Some(
                         if sub_agent_name.is_empty() {
@@ -779,13 +794,44 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
                             sub_agent_name.to_string()
                         },
                     ),
-                    action_state: Some("Success".to_string()),
+                    // Filled in by the matching `sub_agent_complete` below;
+                    // stays "Pending" if the sub-agent is still running or
+                    // its completion record is missing (e.g. crash mid-run).
+                    action_state: Some("Pending".to_string()),
                     input: Some(json!({
                         "subAgentName": p.get("subAgentName").cloned().unwrap_or(Value::Null),
                         "prompt": p.get("prompt").cloned().unwrap_or(Value::Null),
                     })),
                     output: None,
+                    sub_session_id: sub_session_id.clone(),
                 });
+                if let Some(sid) = sub_session_id {
+                    sub_refs.insert(sid, (idx, action_index));
+                }
+            }
+            "sub_agent_complete" => {
+                let sub_session_id = match p.get("subSessionId").and_then(|v| v.as_str()) {
+                    Some(id) => id.to_string(),
+                    None => continue,
+                };
+                let (msg_idx, action_idx) = match sub_refs.get(&sub_session_id) {
+                    Some(&r) => r,
+                    None => continue,
+                };
+                let action = match history
+                    .get_mut(msg_idx)
+                    .and_then(|m| m.actions.get_mut(action_idx))
+                {
+                    Some(a) => a,
+                    None => continue,
+                };
+                let status = p.get("status").and_then(|v| v.as_str()).unwrap_or("success");
+                action.action_state = Some(if status == "error" { "Error" } else { "Success" }.to_string());
+                action.output = Some(json!({
+                    "response": p.get("response").cloned().unwrap_or(Value::Null),
+                    "errorMessage": p.get("errorMessage").cloned().unwrap_or(Value::Null),
+                }));
+                sub_refs.remove(&sub_session_id);
             }
             _ => {}
         }
@@ -794,7 +840,17 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
     for msg in history.iter_mut() {
         msg.finalize_blocks();
     }
+    history
+}
 
+fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
+    let messages_file = meta
+        .v3_dir
+        .as_ref()
+        .map(|d| d.join("messages.jsonl"))
+        .unwrap_or_default();
+    let records = read_jsonl_records(&messages_file);
+    let history = parse_v3_records(&records);
     let message_count = history.len();
     Ok(SessionDetail {
         source: Source::Unified,
@@ -808,6 +864,49 @@ fn get_cli_v3_session(meta: &CliSessionMeta) -> Result<SessionDetail, String> {
         message_count,
         total_cost: meta.total_cost,
         duration_ms: Some((meta.updated_at - meta.created_at).max(0)),
+        cli_version: None,
+        history,
+    })
+}
+
+/// Loads a sub-agent's own transcript — a self-contained mini-session
+/// written to `{sessionDir}/sub-executions/{subSessionId}.jsonl` by the spec
+/// agent (or any agent using `invoke_subagent`-style dispatch) whenever it
+/// hands a task off to a named sub-agent (e.g. `spec-task-execution`). Not
+/// nested inside the parent's own `messages.jsonl` — a fully separate file,
+/// linked only by the `subSessionId` captured on the parent's "subagent"
+/// `Action` (see `sub_agent_start` above).
+pub fn get_subagent_trace(
+    paths: &Paths,
+    session_id: &str,
+    sub_session_id: &str,
+) -> Result<SessionDetail, String> {
+    let meta = find_cli_session_meta(paths, session_id)
+        .ok_or_else(|| format!("session not found: {session_id}"))?;
+    let v3_dir = meta
+        .v3_dir
+        .clone()
+        .ok_or_else(|| "sub-agent traces only exist for Unified (v3) sessions".to_string())?;
+    let trace_file = v3_dir.join("sub-executions").join(format!("{sub_session_id}.jsonl"));
+    if !trace_file.exists() {
+        return Err(format!("sub-agent trace not found: {}", trace_file.display()));
+    }
+    let records = read_jsonl_records(&trace_file);
+    let history = parse_v3_records(&records);
+    let total_cost: f64 = history.iter().map(|m| m.cost).sum();
+    let message_count = history.len();
+    Ok(SessionDetail {
+        source: Source::Unified,
+        session_id: sub_session_id.to_string(),
+        title: format!("Sub-agent of {}", meta.title),
+        model: meta.model.clone(),
+        autonomy_mode: meta.agent_name.clone(),
+        session_type: "unified".to_string(),
+        context_usage: 0.0,
+        workspace_path: meta.cwd.clone(),
+        message_count,
+        total_cost,
+        duration_ms: None,
         cli_version: None,
         history,
     })

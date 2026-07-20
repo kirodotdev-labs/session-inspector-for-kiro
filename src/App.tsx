@@ -36,6 +36,9 @@ export interface Action {
   actionState?: string;
   input?: Record<string, any>;
   output?: any;
+  /** Present only for `actionType: "subagent"` — id of the sub-agent's own
+   * session; fetch its transcript via `getSubagentSession`. */
+  subSessionId?: string;
 }
 
 /** One ordered unit of an assistant turn — a text chunk or a tool call/
