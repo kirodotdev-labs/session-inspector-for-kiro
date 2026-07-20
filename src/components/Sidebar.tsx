@@ -281,8 +281,15 @@ export function Sidebar({
           );
         })}
         {visibleWorkspaces.length === 0 && (
-          <div className="text-xs text-[var(--text-secondary)] px-3 py-6 text-center">
-            No workspaces for this filter.
+          <div className="text-xs text-[var(--text-secondary)] px-3 py-6 text-center flex flex-col items-center gap-2">
+            {refreshing ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                Loading sessions...
+              </>
+            ) : (
+              "No workspaces for this filter."
+            )}
           </div>
         )}
       </div>

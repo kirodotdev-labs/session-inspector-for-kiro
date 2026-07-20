@@ -6,6 +6,7 @@ import {
   FolderOpen,
   TrendingUp,
   Clock,
+  LoaderCircle,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { formatDuration } from "../lib/format";
@@ -124,7 +125,8 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
 
   if (loading)
     return (
-      <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
+      <div className="flex items-center justify-center h-full text-[var(--text-secondary)] gap-2">
+        <LoaderCircle size={16} className="animate-spin" />
         Loading dashboard...
       </div>
     );

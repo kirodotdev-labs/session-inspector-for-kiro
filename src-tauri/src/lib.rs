@@ -88,11 +88,14 @@ pub fn run() {
         })
         .build(app)?;
 
-      // Warm the search index in the background so the first search hits an
-      // up-to-date index without blocking startup.
+      // Warm the search index and the CLI/Unified session-metadata cache in
+      // the background so the frontend's first `list_workspaces`/
+      // `get_dashboard` calls (fired right on mount) are more likely to hit
+      // a warm cache instead of racing a cold one.
       tauri::async_runtime::spawn(async {
         tauri::async_runtime::spawn_blocking(|| {
           let paths = sessions::paths::resolve();
+          sessions::cli::load_all_cli_session_meta(&paths);
           if let Err(e) = search::index_incremental(&paths) {
             log::warn!("startup search indexing failed: {e}");
           }

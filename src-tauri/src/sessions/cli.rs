@@ -269,12 +269,18 @@ struct CliMetaCache {
 static CLI_META_CACHE: Lazy<Mutex<Option<CliMetaCache>>> = Lazy::new(|| Mutex::new(None));
 
 pub fn load_all_cli_session_meta(paths: &Paths) -> Vec<CliSessionMeta> {
-    {
-        let cache = CLI_META_CACHE.lock().unwrap();
-        if let Some(c) = cache.as_ref() {
-            if now_ms() - c.loaded_at < CLI_CACHE_TTL_MS {
-                return c.sessions.clone();
-            }
+    // Held across the whole scan below (rather than released and
+    // re-acquired around it) so that concurrent callers racing on a cold
+    // cache — e.g. on startup, `list_workspaces` and `get_dashboard` both
+    // fire near-simultaneously, plus the background cache-warmer in
+    // `lib.rs` — block on this lock instead of each independently
+    // performing a full filesystem walk + JSON/JSONL parse of every CLI
+    // session file. The second+ caller through just gets the first
+    // caller's freshly-populated cache.
+    let mut cache = CLI_META_CACHE.lock().unwrap();
+    if let Some(c) = cache.as_ref() {
+        if now_ms() - c.loaded_at < CLI_CACHE_TTL_MS {
+            return c.sessions.clone();
         }
     }
 
@@ -298,7 +304,6 @@ pub fn load_all_cli_session_meta(paths: &Paths) -> Vec<CliSessionMeta> {
         }
     }
 
-    let mut cache = CLI_META_CACHE.lock().unwrap();
     *cache = Some(CliMetaCache {
         sessions: sessions.clone(),
         loaded_at: now_ms(),

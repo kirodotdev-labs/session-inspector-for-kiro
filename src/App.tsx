@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { LoaderCircle } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
@@ -173,7 +174,8 @@ function App() {
               </div>
             )
           ) : loading ? (
-            <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
+            <div className="flex items-center justify-center h-full text-[var(--text-secondary)] gap-2">
+              <LoaderCircle size={16} className="animate-spin" />
               Loading session...
             </div>
           ) : session ? (

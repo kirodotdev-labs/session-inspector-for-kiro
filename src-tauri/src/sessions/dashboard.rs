@@ -1,10 +1,12 @@
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
+use std::time::UNIX_EPOCH;
 
 use super::cli::load_all_cli_session_meta;
-use super::ide::ide_active_ms;
+use super::exec_cache::{self, ExecSummary};
 use super::paths::Paths;
 use super::types::{DailyStats, DashboardData, Source, SourceStat, WorkspaceStat};
 use super::util::{decode_base64_url, sha256_hex_prefix};
@@ -14,16 +16,91 @@ fn iso_date(ts_ms: i64) -> String {
     dt.format("%Y-%m-%d").to_string()
 }
 
-fn extract_cost_ide(execution_data: &Value) -> f64 {
-    let summary = match execution_data.get("usageSummary").and_then(|v| v.as_array()) {
-        Some(s) => s,
-        None => return 0.0,
-    };
-    summary
-        .iter()
-        .map(|s| s.get("usage").and_then(|v| v.as_f64()).unwrap_or(0.0))
-        .sum()
+/// Minimal shape of an IDE execution file — just the handful of fields the
+/// dashboard aggregates need. Any other keys (tool call `input`/`output`,
+/// which for a real session history is the overwhelming majority of an
+/// execution file's bytes — file contents, diffs, command output, etc.) are
+/// skipped by serde during parsing rather than built into a `Value` tree,
+/// which is what actually makes this cheaper than the old
+/// `serde_json::from_str::<Value>` — that skipping avoids allocating owned
+/// Rust values for content this call never looks at.
+#[derive(Deserialize)]
+struct RawExec {
+    #[serde(rename = "executionId")]
+    execution_id: Option<String>,
+    #[serde(rename = "usageSummary")]
+    usage_summary: Option<Vec<RawUsage>>,
+    #[serde(rename = "startTime")]
+    start_time: Option<i64>,
+    actions: Option<Vec<RawAction>>,
+    input: Option<RawInput>,
 }
+
+#[derive(Deserialize)]
+struct RawUsage {
+    usage: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct RawAction {
+    #[serde(rename = "actionType")]
+    action_type: Option<String>,
+    #[serde(rename = "emittedAt")]
+    emitted_at: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct RawInput {
+    model: Option<String>,
+}
+
+/// Reads + parses one IDE execution file into just the fields
+/// `compute_dashboard` needs. Mirrors the previous inline
+/// `serde_json::Value`-based extraction (same "must have executionId and
+/// actions keys" gate, same active-time definition, same excluded action
+/// types) but via a targeted struct — see `RawExec`.
+fn parse_exec_summary(contents: &str) -> Option<ExecSummary> {
+    let raw: RawExec = serde_json::from_str(contents).ok()?;
+    if raw.execution_id.is_none() || raw.actions.is_none() {
+        return None;
+    }
+    let cost = raw
+        .usage_summary
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|u| u.usage.unwrap_or(0.0))
+        .sum();
+    let start_time = raw.start_time.unwrap_or(0);
+    let actions = raw.actions.unwrap_or_default();
+    let mut last_emit = start_time;
+    let mut action_counts: HashMap<String, u64> = HashMap::new();
+    for a in &actions {
+        if let Some(e) = a.emitted_at {
+            if e > last_emit {
+                last_emit = e;
+            }
+        }
+        if let Some(t) = &a.action_type {
+            if t != "intentClassification" && t != "model" {
+                *action_counts.entry(t.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    let active_ms = if last_emit > start_time { last_emit - start_time } else { 0 };
+    let model = raw
+        .input
+        .and_then(|i| i.model)
+        .unwrap_or_else(|| "unknown".to_string());
+    Some(ExecSummary {
+        cost,
+        start_time,
+        active_ms,
+        model,
+        action_counts,
+    })
+}
+
 
 /// Dashboard: aggregate stats across all workspaces and executions.
 /// When `filter_path` is provided, only sessions/executions whose workspace
@@ -64,6 +141,13 @@ pub fn compute_dashboard(
     // Legacy IDE sessions are never Unified, so skip them entirely when the
     // dashboard is scoped to a different source.
     if source_filter.is_none() || source_filter == Some(Source::Ide) {
+        // Loaded once up front (see `exec_cache`) so the per-execution-file
+        // loop below can skip reading+parsing files that haven't changed
+        // since the last dashboard computation — for a real install this is
+        // the overwhelming majority of files, every time.
+        let cached = exec_cache::load_all();
+        let mut cache_updates: Vec<(String, i64, i64, ExecSummary)> = Vec::new();
+
         if let Ok(dirs) = fs::read_dir(&paths.sessions_dir) {
             for entry in dirs.flatten() {
                 let dir_path = entry.path();
@@ -176,51 +260,53 @@ pub fn compute_dashboard(
                             if !meta.is_file() || meta.len() < 100 {
                                 continue;
                             }
-                            let contents = match fs::read_to_string(&file_path) {
-                                Ok(c) => c,
-                                Err(_) => continue,
+                            let file_size = meta.len() as i64;
+                            let mtime_ms = meta
+                                .modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            let path_key = file_path.to_string_lossy().to_string();
+
+                            let summary = match exec_cache::get_fresh(
+                                &cached, &path_key, mtime_ms, file_size,
+                            ) {
+                                Some(s) => s.clone(),
+                                None => {
+                                    let contents = match fs::read_to_string(&file_path) {
+                                        Ok(c) => c,
+                                        Err(_) => continue,
+                                    };
+                                    let s = match parse_exec_summary(&contents) {
+                                        Some(s) => s,
+                                        None => continue,
+                                    };
+                                    cache_updates.push((path_key, mtime_ms, file_size, s.clone()));
+                                    s
+                                }
                             };
-                            let data: Value = match serde_json::from_str(&contents) {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            if data.get("executionId").is_none() || data.get("actions").is_none() {
-                                continue;
-                            }
 
                             ws_execs += 1;
                             total_executions += 1;
                             source_stats.get_mut(&Source::Ide).unwrap().executions += 1;
-                            let cost = extract_cost_ide(&data);
-                            ws_cost += cost;
-                            total_cost += cost;
-                            source_stats.get_mut(&Source::Ide).unwrap().cost += cost;
+                            ws_cost += summary.cost;
+                            total_cost += summary.cost;
+                            source_stats.get_mut(&Source::Ide).unwrap().cost += summary.cost;
 
                             // Active turn time: start → last emitted agent action.
-                            ws_duration += ide_active_ms(&data);
+                            ws_duration += summary.active_ms;
 
-                            let start_time = data.get("startTime").and_then(|v| v.as_i64()).unwrap_or(0);
-                            let bucket = bucket_daily(&mut daily_stats, start_time);
-                            bucket.cost += cost;
+                            let bucket = bucket_daily(&mut daily_stats, summary.start_time);
+                            bucket.cost += summary.cost;
                             bucket.executions += 1;
-                            bucket.ide_cost += cost;
+                            bucket.ide_cost += summary.cost;
                             bucket.ide_executions += 1;
-                            if let Some(actions) = data.get("actions").and_then(|v| v.as_array()) {
-                                for a in actions {
-                                    if let Some(t) = a.get("actionType").and_then(|v| v.as_str()) {
-                                        if t != "intentClassification" && t != "model" {
-                                            *bucket.actions.entry(t.to_string()).or_insert(0) += 1;
-                                        }
-                                    }
-                                }
+                            for (t, count) in &summary.action_counts {
+                                *bucket.actions.entry(t.clone()).or_insert(0) += count;
                             }
-                            let model = data
-                                .get("input")
-                                .and_then(|v| v.get("model"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown")
-                                .to_string();
-                            *model_usage.entry(model).or_insert(0.0) += cost;
+                            *model_usage.entry(summary.model.clone()).or_insert(0.0) +=
+                                summary.cost;
                         }
                     }
                 }
@@ -238,6 +324,8 @@ pub fn compute_dashboard(
                 total_duration += ws_duration;
             }
         }
+
+        exec_cache::save_all(&cache_updates);
     }
 
     // --- CLI-family (legacy CLI v2 -> "cli", shared v3 format -> "unified") ---
