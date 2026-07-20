@@ -19,9 +19,10 @@ import {
   Check,
   LoaderCircle,
   AlertTriangle,
+  X,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { SessionDetail, Action, Source } from "../App";
 import { formatDuration } from "../lib/format";
 import { SOURCE_BADGE_CLASS, SOURCE_DISPLAY_NAMES } from "../lib/source";
@@ -32,6 +33,21 @@ import { getSubagentSession } from "../lib/api";
 interface Props {
   session: SessionDetail;
 }
+
+/** A selected "subagent" action, shown in the right-hand pane. Selection
+ * (rather than each action managing its own inline expand state) lives at
+ * the `SessionView` root so only one sub-agent transcript pane is open at a
+ * time, consistently positioned to the right regardless of how deep the
+ * action is nested in the main transcript. */
+interface SubagentSelection {
+  action: Action;
+  subSessionId: string;
+}
+
+const SubagentSelectionContext = createContext<{
+  selectedSubSessionId: string | null;
+  select: (selection: SubagentSelection) => void;
+} | null>(null);
 
 function ActionIcon({ type }: { type: string }) {
   switch (type) {
@@ -185,13 +201,7 @@ function ActionBlock({
   }
 
   if (isSubagent && action.subSessionId && sessionId) {
-    return (
-      <SubAgentAction
-        action={action}
-        sessionId={sessionId}
-        subSessionId={action.subSessionId}
-      />
-    );
+    return <SubAgentActionRow action={action} subSessionId={action.subSessionId} />;
   }
 
   return (
@@ -240,100 +250,138 @@ function ActionBlock({
 }
 
 /** A dispatched sub-agent task (e.g. the spec agent's `spec-task-execution`
- * sub-agent). Expanding it fetches and renders that sub-agent's own
- * transcript inline, via `get_subagent_session` — it's a fully separate
- * on-disk file (`sub-executions/{subSessionId}.jsonl`), not part of the
- * parent's own message stream, so it isn't available until fetched. */
-function SubAgentAction({
+ * sub-agent). Selecting it opens/updates the right-hand pane (see
+ * `SubAgentPane`) with that sub-agent's own transcript, fetched from its
+ * separate on-disk file — rather than expanding inline, so the main
+ * transcript's flow isn't interrupted by a potentially long nested thread. */
+function SubAgentActionRow({
   action,
-  sessionId,
   subSessionId,
 }: {
   action: Action;
-  sessionId: string;
   subSessionId: string;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const ctx = useContext(SubagentSelectionContext);
+  const isSelected = ctx?.selectedSubSessionId === subSessionId;
+  const isError = action.actionState === "Error";
+
+  return (
+    <button
+      onClick={() => ctx?.select({ action, subSessionId })}
+      className={clsx(
+        "my-1 flex items-center gap-1.5 text-xs font-mono rounded px-1.5 py-1 -mx-1.5 transition-colors w-full text-left",
+        isSelected
+          ? "bg-indigo-500/15 text-indigo-300"
+          : "text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/5",
+      )}
+    >
+      <Layers size={12} />
+      <span className="truncate max-w-md">{describeAction(action)}</span>
+      {isError && (
+        <span className="ml-1 flex items-center gap-0.5 text-red-400">
+          <AlertTriangle size={10} /> Error
+        </span>
+      )}
+      {!action.actionState || action.actionState === "Pending" ? (
+        <span className="ml-1 text-yellow-500">(Pending)</span>
+      ) : null}
+      <ChevronRight size={12} className="ml-auto shrink-0 opacity-60" />
+    </button>
+  );
+}
+
+/** Right-hand pane showing the currently-selected sub-agent's own
+ * transcript, fetched on demand via `get_subagent_session` — it's a fully
+ * separate on-disk file (`sub-executions/{subSessionId}.jsonl`), not part
+ * of the parent's own message stream, so it isn't available until fetched. */
+function SubAgentPane({
+  sessionId,
+  selection,
+  onClose,
+}: {
+  sessionId: string;
+  selection: SubagentSelection;
+  onClose: () => void;
+}) {
   const [trace, setTrace] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { action, subSessionId } = selection;
 
-  const toggle = () => {
-    setExpanded((e) => !e);
-    if (!trace && !loading) {
-      setLoading(true);
-      setError(null);
-      getSubagentSession(sessionId, subSessionId)
-        .then(setTrace)
-        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-        .finally(() => setLoading(false));
-    }
-  };
+  useEffect(() => {
+    setTrace(null);
+    setLoading(true);
+    setError(null);
+    getSubagentSession(sessionId, subSessionId)
+      .then(setTrace)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, [sessionId, subSessionId]);
 
   const prompt: string | undefined = action.input?.prompt;
   const isError = action.actionState === "Error";
-  const response: string | undefined =
-    typeof action.output === "object" ? action.output?.response : undefined;
   const errorMessage: string | undefined =
     typeof action.output === "object" ? action.output?.errorMessage : undefined;
 
   return (
-    <div className="my-1 border-l-2 border-indigo-500/40 pl-3">
-      <button
-        onClick={toggle}
-        className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-mono"
-      >
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <Layers size={12} />
-        <span className="truncate max-w-md">{describeAction(action)}</span>
-        {isError && (
-          <span className="ml-1 flex items-center gap-0.5 text-red-400">
-            <AlertTriangle size={10} /> Error
-          </span>
-        )}
-        {!action.actionState || action.actionState === "Pending" ? (
-          <span className="ml-1 text-yellow-500">(Pending)</span>
-        ) : null}
-      </button>
-      {expanded && (
-        <div className="mt-1 space-y-2">
-          {prompt && (
-            <div className="text-xs bg-[var(--bg-tertiary)] rounded p-2 text-[var(--text-secondary)] whitespace-pre-wrap">
-              {prompt}
-            </div>
-          )}
-          {loading && (
-            <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] py-1">
-              <LoaderCircle size={12} className="animate-spin" />
-              Loading sub-agent transcript...
-            </div>
-          )}
-          {error && (
-            <div className="text-xs text-red-400">
-              Failed to load sub-agent transcript: {error}
-            </div>
-          )}
-          {errorMessage && (
-            <div className="text-xs text-red-400 whitespace-pre-wrap">
-              {errorMessage}
-            </div>
-          )}
-          {trace && trace.history.length > 0 && (
-            <div className="border border-indigo-500/20 rounded-lg p-2 bg-indigo-500/5">
-              <MessageList
-                history={trace.history}
-                source={trace.source}
-                sessionId={sessionId}
-              />
-            </div>
-          )}
-          {trace && trace.history.length === 0 && !response && (
-            <div className="text-xs text-[var(--text-secondary)] italic">
-              (no transcript recorded)
-            </div>
+    <div className="h-full flex flex-col">
+      <div className="shrink-0 border-b border-[var(--border)] p-4">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-indigo-300 min-w-0">
+            <Layers size={14} className="shrink-0" />
+            <span className="truncate">{describeAction(action)}</span>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close sub-agent pane"
+            className="shrink-0 p-1 rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          {isError ? (
+            <span className="flex items-center gap-1 text-red-400">
+              <AlertTriangle size={11} /> Error
+            </span>
+          ) : action.actionState === "Pending" ? (
+            <span className="text-yellow-500">Pending</span>
+          ) : (
+            <span className="text-[var(--text-secondary)]">Sub-agent transcript</span>
           )}
         </div>
-      )}
+        {prompt && (
+          <div className="mt-2 text-xs bg-[var(--bg-tertiary)] rounded p-2 text-[var(--text-secondary)] whitespace-pre-wrap max-h-24 overflow-y-auto">
+            {prompt}
+          </div>
+        )}
+        {errorMessage && (
+          <div className="mt-2 text-xs text-red-400 whitespace-pre-wrap">
+            {errorMessage}
+          </div>
+        )}
+      </div>
+      <div className="flex-1 overflow-y-auto p-4">
+        {loading && (
+          <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] py-1">
+            <LoaderCircle size={12} className="animate-spin" />
+            Loading sub-agent transcript...
+          </div>
+        )}
+        {error && (
+          <div className="text-xs text-red-400">
+            Failed to load sub-agent transcript: {error}
+          </div>
+        )}
+        {trace && trace.history.length > 0 && (
+          <MessageList history={trace.history} source={trace.source} sessionId={sessionId} />
+        )}
+        {trace && trace.history.length === 0 && (
+          <div className="text-xs text-[var(--text-secondary)] italic">
+            (no transcript recorded)
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -522,73 +570,96 @@ function SessionIdCopy({ session }: { session: SessionDetail }) {
 export function SessionView({ session }: Props) {
   const isCli = session.source === "cli";
   const { showNonUnified } = useSettings();
+  const [selection, setSelection] = useState<SubagentSelection | null>(null);
+
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      <div className="mb-6">
-        <div className="flex items-center gap-2 mb-2">
-          {/* Unified sessions are the default/only kind once non-unified
-              sessions are hidden, so the source badge is redundant there. */}
-          {(showNonUnified || session.source !== "unified") && (
-            <span
-              className={clsx(
-                "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border",
-                SOURCE_BADGE_CLASS[session.source],
+    <div className="h-full flex">
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-4xl mx-auto p-6">
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-2">
+              {/* Unified sessions are the default/only kind once non-unified
+                  sessions are hidden, so the source badge is redundant there. */}
+              {(showNonUnified || session.source !== "unified") && (
+                <span
+                  className={clsx(
+                    "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide border",
+                    SOURCE_BADGE_CLASS[session.source],
+                  )}
+                >
+                  <SourceIcon source={session.source} size={10} />{" "}
+                  {SOURCE_DISPLAY_NAMES[session.source]}
+                </span>
               )}
-            >
-              <SourceIcon source={session.source} size={10} />{" "}
-              {SOURCE_DISPLAY_NAMES[session.source]}
-            </span>
-          )}
-          {/* Legacy CLI (v2) keeps its version tag. The v3 tag is retired:
-              those sessions now surface as the "Unified" source instead. */}
-          {isCli && session.cliVersion != null && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
-              v{session.cliVersion}
-            </span>
-          )}
-          <h2 className="text-lg font-medium truncate">
-            {session.title || "Untitled"}
-          </h2>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)] mb-2 font-mono">
-          <span className="truncate">{session.workspacePath}</span>
-          <SessionIdCopy session={session} />
-        </div>
-        <div className="flex flex-wrap gap-3 text-xs text-[var(--text-secondary)]">
-          <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
-            <Bot size={12} /> {session.model}
-          </span>
-          <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
-            <Zap size={12} />{" "}
-            {isCli ? `agent:${session.autonomyMode}` : session.autonomyMode}
-          </span>
-          <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
-            <Layers size={12} /> {session.sessionType}
-          </span>
-          <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
-            <Gauge size={12} /> {session.contextUsage?.toFixed(1)}% context
-          </span>
-          <span className="px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
-            {session.messageCount} messages
-          </span>
-          {session.durationMs != null && session.durationMs > 0 && (
-            <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
-              <Clock size={12} /> {formatDuration(session.durationMs)}
-            </span>
-          )}
-          {session.totalCost > 0 && (
-            <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
-              <Coins size={12} /> {session.totalCost.toFixed(2)} credits
-            </span>
-          )}
+              {/* Legacy CLI (v2) keeps its version tag. The v3 tag is retired:
+                  those sessions now surface as the "Unified" source instead. */}
+              {isCli && session.cliVersion != null && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+                  v{session.cliVersion}
+                </span>
+              )}
+              <h2 className="text-lg font-medium truncate">
+                {session.title || "Untitled"}
+              </h2>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)] mb-2 font-mono">
+              <span className="truncate">{session.workspacePath}</span>
+              <SessionIdCopy session={session} />
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs text-[var(--text-secondary)]">
+              <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+                <Bot size={12} /> {session.model}
+              </span>
+              <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+                <Zap size={12} />{" "}
+                {isCli ? `agent:${session.autonomyMode}` : session.autonomyMode}
+              </span>
+              <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+                <Layers size={12} /> {session.sessionType}
+              </span>
+              <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+                <Gauge size={12} /> {session.contextUsage?.toFixed(1)}% context
+              </span>
+              <span className="px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+                {session.messageCount} messages
+              </span>
+              {session.durationMs != null && session.durationMs > 0 && (
+                <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+                  <Clock size={12} /> {formatDuration(session.durationMs)}
+                </span>
+              )}
+              {session.totalCost > 0 && (
+                <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-[var(--bg-tertiary)]">
+                  <Coins size={12} /> {session.totalCost.toFixed(2)} credits
+                </span>
+              )}
+            </div>
+          </div>
+
+          <SubagentSelectionContext.Provider
+            value={{
+              selectedSubSessionId: selection?.subSessionId ?? null,
+              select: setSelection,
+            }}
+          >
+            <MessageList
+              history={session.history}
+              source={session.source}
+              sessionId={session.sessionId}
+            />
+          </SubagentSelectionContext.Provider>
         </div>
       </div>
 
-      <MessageList
-        history={session.history}
-        source={session.source}
-        sessionId={session.sessionId}
-      />
+      {selection && (
+        <div className="w-[420px] shrink-0 border-l border-[var(--border)] bg-[var(--bg-secondary)]">
+          <SubAgentPane
+            sessionId={session.sessionId}
+            selection={selection}
+            onClose={() => setSelection(null)}
+          />
+        </div>
+      )}
     </div>
   );
 }

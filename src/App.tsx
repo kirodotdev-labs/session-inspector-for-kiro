@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { LoaderCircle } from "lucide-react";
+import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
@@ -143,7 +144,16 @@ function App() {
         />
       <main className="flex-1 flex flex-col overflow-hidden">
         <Tabs view={view} onViewChange={setView} />
-        <div className="flex-1 overflow-y-auto">
+        <div
+          className={clsx(
+            "flex-1",
+            // SessionView manages its own internal scroll regions (main
+            // transcript + the sub-agent side pane), each independently
+            // scrollable — letting this wrapper scroll too would just add a
+            // redundant/confusing second scrollbar around the same content.
+            view === "session" && session ? "overflow-hidden" : "overflow-y-auto",
+          )}
+        >
           {view === "dashboard" ? (
             <Dashboard />
           ) : view === "search" ? (
@@ -182,7 +192,7 @@ function App() {
               Loading session...
             </div>
           ) : session ? (
-            <SessionView session={session} />
+            <SessionView key={session.sessionId} session={session} />
           ) : (
             <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
               <div className="text-center">
