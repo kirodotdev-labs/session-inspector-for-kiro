@@ -56,7 +56,8 @@ pub fn run() {
       let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
       TrayIconBuilder::new()
-        .icon(app.default_window_icon().cloned().unwrap())
+        .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
+        .icon_as_template(true)
         .tooltip("Kiro Sessions Inspector")
         .menu(&tray_menu)
         .show_menu_on_left_click(false)
