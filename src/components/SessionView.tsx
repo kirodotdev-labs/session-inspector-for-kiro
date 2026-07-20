@@ -567,13 +567,92 @@ function SessionIdCopy({ session }: { session: SessionDetail }) {
   );
 }
 
+/** Minimum width (px) either side of the drag handle is allowed to shrink
+ * to — keeps both the main transcript and the sub-agent pane usable at the
+ * extremes of a drag. */
+const MIN_PANE_WIDTH = 280;
+const MIN_MAIN_WIDTH = 360;
+
+function clampPaneWidth(width: number, containerWidth: number): number {
+  const max = Math.max(MIN_PANE_WIDTH, containerWidth - MIN_MAIN_WIDTH);
+  return Math.min(Math.max(width, MIN_PANE_WIDTH), max);
+}
+
+/** Drag handle between the main transcript and the sub-agent pane. Uses
+ * Pointer Events (rather than plain mouse events) so dragging keeps working
+ * correctly even if the pointer briefly leaves the handle's thin hit area
+ * mid-drag. */
+function ResizeHandle({ onResize }: { onResize: (deltaX: number) => void }) {
+  const draggingRef = useRef(false);
+  const lastXRef = useRef(0);
+  const onResizeRef = useRef(onResize);
+  onResizeRef.current = onResize;
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!draggingRef.current) return;
+      const deltaX = e.clientX - lastXRef.current;
+      lastXRef.current = e.clientX;
+      onResizeRef.current(deltaX);
+    };
+    const stopDragging = () => {
+      draggingRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", stopDragging);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", stopDragging);
+    };
+  }, []);
+
+  return (
+    <div
+      onPointerDown={(e) => {
+        draggingRef.current = true;
+        lastXRef.current = e.clientX;
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+      }}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sub-agent pane"
+      className="w-1 shrink-0 cursor-col-resize bg-[var(--border)] hover:bg-[var(--accent)]/50 active:bg-[var(--accent)]/70 transition-colors"
+    />
+  );
+}
+
 export function SessionView({ session }: Props) {
   const isCli = session.source === "cli";
   const { showNonUnified } = useSettings();
   const [selection, setSelection] = useState<SubagentSelection | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [paneWidth, setPaneWidth] = useState(420);
+  // Only set once per session view, the first time the pane opens — after
+  // that, a manual resize should stick across selecting other sub-agents in
+  // the same session rather than snapping back to 25% every time.
+  const hasSizedPane = useRef(false);
+
+  useEffect(() => {
+    if (selection && !hasSizedPane.current) {
+      hasSizedPane.current = true;
+      const total = containerRef.current?.getBoundingClientRect().width;
+      if (total) {
+        setPaneWidth(clampPaneWidth(Math.round(total * 0.25), total));
+      }
+    }
+  }, [selection]);
+
+  const handleResize = (deltaX: number) => {
+    const total = containerRef.current?.getBoundingClientRect().width;
+    if (!total) return;
+    setPaneWidth((w) => clampPaneWidth(w - deltaX, total));
+  };
 
   return (
-    <div className="h-full flex">
+    <div ref={containerRef} className="h-full flex">
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto p-6">
           <div className="mb-6">
@@ -652,13 +731,19 @@ export function SessionView({ session }: Props) {
       </div>
 
       {selection && (
-        <div className="w-[420px] shrink-0 border-l border-[var(--border)] bg-[var(--bg-secondary)]">
-          <SubAgentPane
-            sessionId={session.sessionId}
-            selection={selection}
-            onClose={() => setSelection(null)}
-          />
-        </div>
+        <>
+          <ResizeHandle onResize={handleResize} />
+          <div
+            className="shrink-0 bg-[var(--bg-secondary)]"
+            style={{ width: paneWidth }}
+          >
+            <SubAgentPane
+              sessionId={session.sessionId}
+              selection={selection}
+              onClose={() => setSelection(null)}
+            />
+          </div>
+        </>
       )}
     </div>
   );
