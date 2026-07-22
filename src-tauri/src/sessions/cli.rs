@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::paths::Paths;
 use super::types::{Action, HistoryMsg, SessionDetail, SessionSummary, Source, Workspace};
-use super::util::normalize_cli_tool_type;
+use super::util::{is_safe_path_component, normalize_cli_tool_type};
 
 // ---------------------------------------------------------------------------
 // CLI sessions (~/.kiro/sessions/cli) + CLI v3 / Unified
@@ -378,6 +378,13 @@ fn find_cli_session_meta(paths: &Paths, session_id: &str) -> Option<CliSessionMe
 }
 
 pub fn get_cli_session(paths: &Paths, session_id: &str) -> Result<SessionDetail, String> {
+    // `session_id` is caller-supplied over IPC and is interpolated into the v2
+    // file path (`{session_id}.json`/`.jsonl`) below; reject traversal-capable
+    // values before any path is built (T-006). v3 resolves via a disk scan and
+    // never interpolates the id into a path, but validating here covers both.
+    if !is_safe_path_component(session_id) {
+        return Err(format!("invalid session id: {session_id}"));
+    }
     let meta = find_cli_session_meta(paths, session_id);
     match meta {
         Some(m) if m.version == 3 => get_cli_v3_session(&m),
@@ -881,6 +888,15 @@ pub fn get_subagent_trace(
     session_id: &str,
     sub_session_id: &str,
 ) -> Result<SessionDetail, String> {
+    // `sub_session_id` is interpolated into the trace file path below, and
+    // `session_id` is caller-supplied over IPC; reject traversal-capable
+    // values before touching the filesystem (T-006).
+    if !is_safe_path_component(session_id) {
+        return Err(format!("invalid session id: {session_id}"));
+    }
+    if !is_safe_path_component(sub_session_id) {
+        return Err(format!("invalid sub-session id: {sub_session_id}"));
+    }
     let meta = find_cli_session_meta(paths, session_id)
         .ok_or_else(|| format!("session not found: {session_id}"))?;
     let v3_dir = meta

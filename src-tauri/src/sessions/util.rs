@@ -1,5 +1,33 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
+use std::path::{Component, Path};
+
+/// True when `s` is safe to use as a **single** filesystem path component when
+/// joined onto a trusted base directory.
+///
+/// Externally-supplied identifiers (workspace ids, session ids, sub-session
+/// ids) arrive over the Tauri IPC boundary and are interpolated into on-disk
+/// paths by the session loaders. Without validation, a value like
+/// `../../../../etc/hosts` or an absolute path would let a caller read files
+/// outside the Kiro data directories (see T-006 in `THREAT_MODEL.md`).
+///
+/// We defer to the OS path parser: `s` is accepted only if it parses to
+/// exactly one [`Component::Normal`] and nothing else. This rejects empty
+/// strings, `.`/`..`, path separators (`/` on Unix, `/` and `\` on Windows),
+/// absolute paths, and Windows drive prefixes — on the same platform whose
+/// separators would actually be honored by [`Path::join`]. Legitimate ids
+/// (UUIDs, `sess_*`, base64url-encoded workspace dir names) are single normal
+/// components and pass unchanged.
+pub fn is_safe_path_component(s: &str) -> bool {
+    if s.is_empty() || s.contains('\0') {
+        return false;
+    }
+    let mut comps = Path::new(s).components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Normal(_)), None)
+    )
+}
 
 /// Direct port of `decodeBase64Url` in `server/index.ts`. Node's
 /// `Buffer.from(str, "base64")` silently skips characters outside the base64
@@ -101,4 +129,41 @@ pub fn normalize_cli_tool_type(name: &str) -> String {
         return "search".to_string();
     }
     name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_path_component;
+
+    #[test]
+    fn accepts_legitimate_ids() {
+        // UUID-style, sess_-prefixed, and base64url workspace dir names.
+        assert!(is_safe_path_component("a1b2c3d4-5e6f-7890-abcd-ef0123456789"));
+        assert!(is_safe_path_component("sess_01HXYZ"));
+        assert!(is_safe_path_component("L1VzZXJzL2FuZ21hcy9Qcm9qZWN0cw"));
+        assert!(is_safe_path_component("plain"));
+        // A literal `..` embedded in a name (not a parent ref) is a valid file.
+        assert!(is_safe_path_component("foo..bar"));
+    }
+
+    #[test]
+    fn rejects_traversal_and_separators() {
+        assert!(!is_safe_path_component(""));
+        assert!(!is_safe_path_component("."));
+        assert!(!is_safe_path_component(".."));
+        assert!(!is_safe_path_component("../etc/hosts"));
+        assert!(!is_safe_path_component("../../../../etc/hosts"));
+        assert!(!is_safe_path_component("foo/bar"));
+        assert!(!is_safe_path_component("/etc/passwd"));
+        assert!(!is_safe_path_component("a/../b"));
+        assert!(!is_safe_path_component("with\0nul"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_windows_separators_and_prefixes() {
+        assert!(!is_safe_path_component("..\\..\\secret"));
+        assert!(!is_safe_path_component("C:\\Windows"));
+        assert!(!is_safe_path_component("C:foo"));
+    }
 }

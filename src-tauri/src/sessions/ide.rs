@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use super::paths::Paths;
 use super::types::{Action, HistoryMsg, SessionDetail, SessionSummary, Source, Workspace};
-use super::util::{decode_base64_url, sha256_hex_prefix};
+use super::util::{decode_base64_url, is_safe_path_component, sha256_hex_prefix};
 
 // ---------------------------------------------------------------------------
 // IDE sessions (Application Support/Kiro/.../workspace-sessions)
@@ -203,6 +203,16 @@ pub fn get_ide_session(
     workspace_id: &str,
     session_id: &str,
 ) -> Result<SessionDetail, String> {
+    // `workspace_id` (a workspace directory name) and `session_id` are supplied
+    // by the caller over IPC and interpolated into the path below; reject any
+    // value that isn't a single benign path component to prevent traversal
+    // outside the Kiro sessions directory (T-006).
+    if !is_safe_path_component(workspace_id) {
+        return Err(format!("invalid workspace id: {workspace_id}"));
+    }
+    if !is_safe_path_component(session_id) {
+        return Err(format!("invalid session id: {session_id}"));
+    }
     let session_file = paths
         .sessions_dir
         .join(workspace_id)
