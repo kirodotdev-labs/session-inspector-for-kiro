@@ -205,23 +205,23 @@ function ActionBlock({
   }
 
   return (
-    <div className="my-1">
+    <div className="my-1 min-w-0 flex flex-col gap-1">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-mono"
+        className="w-full min-w-0 flex items-center gap-1.5 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] font-mono"
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <ActionIcon type={action.actionType} />
-        <span className="truncate max-w-md">{describeAction(action)}</span>
+        <span className="truncate flex-1 min-w-0 text-left">{describeAction(action)}</span>
         {action.rawToolName && action.rawToolName !== action.actionType && (
-          <span className="text-[10px] text-[var(--text-secondary)] opacity-70">
+          <span className="text-[10px] text-[var(--text-secondary)] opacity-70 shrink-0">
             [{action.rawToolName}]
           </span>
         )}
         {action.actionState && action.actionState !== "Success" && (
           <span
             className={clsx(
-              "ml-1",
+              "ml-1 shrink-0",
               action.actionState === "Error"
                 ? "text-red-400"
                 : "text-yellow-500",
@@ -232,9 +232,9 @@ function ActionBlock({
         )}
       </button>
       {expanded && (
-        <div className="mt-1 ml-5 text-xs bg-[var(--bg-tertiary)] rounded p-2 overflow-x-auto">
+        <div className="ml-5 min-w-0 text-xs bg-[var(--bg-tertiary)] rounded p-2 overflow-x-auto">
           {action.input && (
-            <pre className="text-[var(--text-secondary)]">
+            <pre className="text-[var(--text-secondary)] whitespace-pre-wrap break-words">
               {JSON.stringify(action.input, null, 2)}
             </pre>
           )}
@@ -269,21 +269,21 @@ function SubAgentActionRow({
     <button
       onClick={() => ctx?.select({ action, subSessionId })}
       className={clsx(
-        "my-1 flex items-center gap-1.5 text-xs font-mono rounded px-1.5 py-1 -mx-1.5 transition-colors w-full text-left",
+        "my-1 flex items-center gap-1.5 text-xs font-mono rounded px-1.5 py-1 -mx-1.5 transition-colors w-full min-w-0 text-left",
         isSelected
           ? "bg-indigo-500/15 text-indigo-300"
           : "text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/5",
       )}
     >
-      <Layers size={12} />
-      <span className="truncate max-w-md">{describeAction(action)}</span>
+      <Layers size={12} className="shrink-0" />
+      <span className="truncate flex-1 min-w-0">{describeAction(action)}</span>
       {isError && (
-        <span className="ml-1 flex items-center gap-0.5 text-red-400">
+        <span className="ml-1 flex items-center gap-0.5 text-red-400 shrink-0">
           <AlertTriangle size={10} /> Error
         </span>
       )}
       {!action.actionState || action.actionState === "Pending" ? (
-        <span className="ml-1 text-yellow-500">(Pending)</span>
+        <span className="ml-1 text-yellow-500 shrink-0">(Pending)</span>
       ) : null}
       <ChevronRight size={12} className="ml-auto shrink-0 opacity-60" />
     </button>
@@ -327,9 +327,9 @@ function SubAgentPane({
     <div className="h-full flex flex-col">
       <div className="shrink-0 border-b border-[var(--border)] p-4">
         <div className="flex items-center justify-between gap-2 mb-1">
-          <div className="flex items-center gap-1.5 text-sm font-medium text-indigo-300 min-w-0">
+          <div className="flex-1 min-w-0 flex items-center gap-1.5 text-sm font-medium text-indigo-300">
             <Layers size={14} className="shrink-0" />
-            <span className="truncate">{describeAction(action)}</span>
+            <span className="truncate min-w-0">{describeAction(action)}</span>
           </div>
           <button
             onClick={onClose}
@@ -351,12 +351,12 @@ function SubAgentPane({
           )}
         </div>
         {prompt && (
-          <div className="mt-2 text-xs bg-[var(--bg-tertiary)] rounded p-2 text-[var(--text-secondary)] whitespace-pre-wrap max-h-24 overflow-y-auto">
+          <div className="mt-2 text-xs bg-[var(--bg-tertiary)] rounded p-2 text-[var(--text-secondary)] whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
             {prompt}
           </div>
         )}
         {errorMessage && (
-          <div className="mt-2 text-xs text-red-400 whitespace-pre-wrap">
+          <div className="mt-2 text-xs text-red-400 whitespace-pre-wrap break-words">
             {errorMessage}
           </div>
         )}
@@ -439,7 +439,7 @@ function MessageList({
           </div>
 
           {msg.blocks && msg.blocks.length > 0 ? (
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               {msg.blocks.map((block, j) =>
                 block.type === "text" ? (
                   <div
@@ -462,7 +462,7 @@ function MessageList({
               )}
 
               {msg.actions && msg.actions.length > 0 && (
-                <div className="mt-2 space-y-0.5">
+                <div className="mt-2 flex flex-col gap-1">
                   {msg.actions.map((action, j) => (
                     <ActionBlock key={j} action={action} sessionId={sessionId} />
                   ))}
@@ -632,7 +632,7 @@ export function SessionView({ session }: Props) {
   const [paneWidth, setPaneWidth] = useState(420);
   // Only set once per session view, the first time the pane opens — after
   // that, a manual resize should stick across selecting other sub-agents in
-  // the same session rather than snapping back to 25% every time.
+  // the same session rather than snapping back to 50% every time.
   const hasSizedPane = useRef(false);
 
   useEffect(() => {
@@ -640,7 +640,7 @@ export function SessionView({ session }: Props) {
       hasSizedPane.current = true;
       const total = containerRef.current?.getBoundingClientRect().width;
       if (total) {
-        setPaneWidth(clampPaneWidth(Math.round(total * 0.25), total));
+        setPaneWidth(clampPaneWidth(Math.round(total * 0.5), total));
       }
     }
   }, [selection]);
