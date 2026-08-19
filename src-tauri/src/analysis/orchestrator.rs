@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::analysis::{self, store, Window};
+use crate::mcp::REPORT_DIR_ENV;
 use crate::sessions::paths;
 
 const AGENT_NAME: &str = "kiro-session-analyst";
@@ -73,14 +74,14 @@ and quote claims. Prefer two supporting sessions per claim.
 11. fun_ending — a headline + detail: one memorable moment inferred from my sessions,
     written with light humor but factually accurate.
 
-## OUTPUT FORMAT — write ONE self-contained HTML document to a file
-Your deliverable is a file, NOT a chat message. Using the `fs_write` tool, write
-ONE complete HTML document to the exact file path given in the task. The document
-MUST start with `<!DOCTYPE html>` and end with `</html>`. Because it is large,
-write it incrementally: `fs_write` with `create` for the first chunk, then
-`append` for subsequent chunks until the document is complete. Do NOT print the
-HTML into the chat — after the file is fully written, reply with just the word
-`done`.
+## OUTPUT FORMAT — write ONE self-contained HTML document via write_report
+Your deliverable is a file, NOT a chat message. Using the `write_report` tool,
+write ONE complete HTML document under the report name given in the task. The
+document MUST start with `<!DOCTYPE html>` and end with `</html>`. `write_report`
+takes only `name` and `content` — call it repeatedly with the SAME `name` to
+build up the document across chunks (each call appends; the first call creates
+the file). Do NOT print the HTML into the chat — after the file is fully
+written, reply with just the word `done`.
 
 Requirements:
 - Fully self-contained: all CSS in a single inline `<style>`, all JS in inline
@@ -193,8 +194,12 @@ fn augmented_path() -> String {
 }
 
 /// Build a temp working directory containing `.kiro/agents/<AGENT_NAME>.json`
-/// so kiro-cli discovers the agent as a workspace-local agent.
-fn write_agent(work_dir: &PathBuf, prompt: &str) -> Result<(), String> {
+/// so kiro-cli discovers the agent as a workspace-local agent. `report_dir` is
+/// the one directory the analyst's `write_report` MCP tool is allowed to
+/// write into — it's passed to the MCP server child process via
+/// [`REPORT_DIR_ENV`], not to the model, so a prompt-injected model can
+/// influence the report's *name* but never *where* it's written.
+fn write_agent(work_dir: &PathBuf, report_dir: &PathBuf, prompt: &str) -> Result<(), String> {
     let exe = self_exe()?;
     let agents_dir = work_dir.join(".kiro/agents");
     fs::create_dir_all(&agents_dir).map_err(|e| e.to_string())?;
@@ -207,12 +212,15 @@ fn write_agent(work_dir: &PathBuf, prompt: &str) -> Result<(), String> {
             "sessions": {
                 "command": exe.to_string_lossy(),
                 "args": ["mcp-server"],
+                "env": {
+                    REPORT_DIR_ENV: report_dir.to_string_lossy()
+                },
                 "timeout": 120000,
                 "disabled": false
             }
         },
-        "tools": ["@sessions", "thinking", "fs_write"],
-        "allowedTools": ["@sessions", "thinking", "fs_write"],
+        "tools": ["@sessions", "thinking"],
+        "allowedTools": ["@sessions", "thinking"],
         "toolAliases": {},
         "resources": [],
         "hooks": {},
@@ -224,6 +232,23 @@ fn write_agent(work_dir: &PathBuf, prompt: &str) -> Result<(), String> {
     fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Read whichever `.html` file `write_report` produced in `report_dir` (there
+/// should be exactly one for a normal run). `write_report` sanitizes the
+/// model-supplied name, so this reads by extension rather than assuming the
+/// exact name suggested in the prompt was used verbatim.
+fn read_first_html(report_dir: &PathBuf) -> Option<String> {
+    let entries = fs::read_dir(report_dir).ok()?;
+    let mut candidates: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("html"))
+        .collect();
+    // Prefer the most recently modified file if more than one was written.
+    candidates.sort_by_key(|p| fs::metadata(p).and_then(|m| m.modified()).ok());
+    let path = candidates.pop()?;
+    fs::read_to_string(&path).ok()
 }
 
 /// Run a headless analysis for `window`, persist the resulting HTML report,
@@ -244,24 +269,32 @@ pub fn run(
     // 2. Temp workspace-local agent that registers this binary as the MCP server.
     let work_dir = std::env::temp_dir().join(format!("kiro-analyst-{}", std::process::id()));
     let prompt = analyst_prompt().replace("{{VOICE}}", voice_line(voice));
-    write_agent(&work_dir, &prompt)?;
 
-    // Kiro writes the HTML report here (via fs_write) — writing to a file
-    // sidesteps the output-token cap that truncates a large final chat message.
-    let output_path = work_dir.join("report.html");
+    // The one directory `write_report` may write into for this run — created
+    // and owned entirely by the app; the agent config hands its path to the
+    // MCP server subprocess via an env var, never to the model (see
+    // `write_agent`).
+    let report_dir = work_dir.join("report-out");
+    fs::create_dir_all(&report_dir).map_err(|e| e.to_string())?;
 
-    // 3. Compose the user message: instructions + seed stats + output path.
+    write_agent(&work_dir, &report_dir, &prompt)?;
+
+    const REPORT_NAME: &str = "report";
+
+    // 3. Compose the user message: instructions + seed stats + report name.
     let message = format!(
-        "Analyze my Kiro usage for the last {win}.\n\nHere is the seed get_overview payload for this window (call the tools to dig deeper):\n\n```json\n{seed}\n```\n\nWrite the complete HTML report to this exact file path using the fs_write tool (use `create` then `append` for large content):\n{out}\n\nAfter the file is fully written, reply with just `done`.",
+        "Analyze my Kiro usage for the last {win}.\n\nHere is the seed get_overview payload for this window (call the tools to dig deeper):\n\n```json\n{seed}\n```\n\nWrite the complete HTML report using the write_report tool with name=\"{name}\" (call it repeatedly with that same name to append chunks for a large document).\n\nAfter the file is fully written, reply with just `done`.",
         win = window.as_str(),
         seed = seed,
-        out = output_path.display(),
+        name = REPORT_NAME,
     );
 
     // 4. Spawn kiro-cli headless. The agent's `tools` list restricts it to our
-    //    read-only MCP tools + `thinking` + `fs_write`, so `--trust-all-tools`
-    //    is safe here and reliably auto-approves the namespaced MCP tool calls
-    //    (the `--trust-tools=@sessions` shorthand does not always match them).
+    //    read-only MCP tools + `thinking` + the narrowly-scoped `write_report`
+    //    tool (name+content only, no path — see `mcp/mod.rs`), so
+    //    `--trust-all-tools` is safe here and reliably auto-approves the
+    //    namespaced MCP tool calls (the `--trust-tools=@sessions` shorthand
+    //    does not always match them).
     let cli_bin = kiro_cli_bin(cli_path);
     let output = Command::new(&cli_bin)
         .current_dir(&work_dir)
@@ -275,8 +308,11 @@ pub fn run(
         .output()
         .map_err(|e| format!("failed to spawn kiro-cli (\"{cli_bin}\"): {e}"))?;
 
-    // Read the report file Kiro wrote (before cleaning up the temp dir).
-    let file_html = fs::read_to_string(&output_path).ok();
+    // Read whatever HTML report `write_report` produced (before cleaning up
+    // the temp dir). The tool sanitizes the model-chosen name, so read
+    // whichever `.html` file landed in `report_dir` rather than assuming the
+    // exact name we suggested was honored verbatim.
+    let file_html = read_first_html(&report_dir);
     let _ = fs::remove_dir_all(&work_dir);
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();

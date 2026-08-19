@@ -10,12 +10,26 @@
 //! `analysis` module) — never raw tool calls/results. The lone exception is
 //! `get_user_prompts`, which returns the user's own prompt text so the
 //! analyst can quote directives verbatim.
+//!
+//! The one write capability, `write_report`, is deliberately narrow: it
+//! takes only a `name` (sanitized to a bare filename) and `content`, never a
+//! path, and it only ever writes inside a directory the orchestrator created
+//! for this run and handed to this process via `KIRO_INSPECTOR_REPORT_DIR`.
+//! This replaces the previous design of granting the analyst agent the
+//! general-purpose `fs_write` tool, which could write to any path a
+//! prompt-injected model chose.
 
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 
 use crate::analysis::{self, Window};
 use crate::sessions::paths;
+
+/// Env var the orchestrator sets (only when it spawns this process as the
+/// `sessions` MCP server for an analysis run) naming the one directory
+/// `write_report` is allowed to write into. Never settable by the model.
+pub(crate) const REPORT_DIR_ENV: &str = "KIRO_INSPECTOR_REPORT_DIR";
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "kiro-sessions-analyst";
@@ -159,6 +173,24 @@ fn tool_specs() -> Value {
                 },
                 "required": ["sessionId"]
             }
+        },
+        {
+            "name": "write_report",
+            "description": "Append content to the analysis report for this run. Takes ONLY a report `name` and a `content` chunk — there is no path/destination argument. `name` is sanitized to a bare filename (any path structure is stripped, unsafe characters are dropped) and a `.html` extension is applied automatically. Call this repeatedly with the SAME `name` to build up a large document across multiple calls (each call appends); the first call creates the file. Writes exclusively inside a fixed directory this app created for this run — it is not possible to write anywhere else on disk.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Report name, e.g. \"report\". Used only to derive the output filename (sanitized; `.html` added automatically) — not a path."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "HTML content to append to the report file."
+                    }
+                },
+                "required": ["name", "content"]
+            }
         }
     ])
 }
@@ -204,10 +236,98 @@ fn handle_tool_call(params: &Value) -> Result<String, String> {
                 None => return Err(format!("session not found: {id}")),
             }
         }
+        "write_report" => {
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or("missing name")?;
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or("missing content")?;
+            let (path, bytes) = write_report(name, content)?;
+            json!({
+                "fileName": path.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+                "bytesWritten": bytes
+            })
+        }
         other => return Err(format!("unknown tool: {other}")),
     };
 
     serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
+}
+
+/// Resolve the one app-owned directory `write_report` may write into. Set by
+/// the orchestrator (never by the model) via [`REPORT_DIR_ENV`] when it spawns
+/// this process in `mcp-server` mode for an analysis run; if it is unset (e.g.
+/// this binary is used as a generic read-only MCP server elsewhere) the write
+/// tool has no reachable destination at all.
+fn report_dir() -> Result<PathBuf, String> {
+    let dir = std::env::var(REPORT_DIR_ENV)
+        .map_err(|_| "write_report is not available in this context (no report directory configured)".to_string())?;
+    let path = PathBuf::from(dir);
+    if !path.is_dir() {
+        return Err("configured report directory does not exist".to_string());
+    }
+    Ok(path)
+}
+
+/// Sanitize a caller-supplied report name into a bare filename component.
+/// Only the final path segment is considered (so `../../etc/passwd` collapses
+/// to `passwd`), only ASCII alphanumerics/`-`/`_` are kept, everything else
+/// (including `.`, spaces, separators) becomes a single `-`, and the result is
+/// capped in length. Never returns anything containing a path separator or an
+/// extension supplied by the caller — the `.html` extension is always applied
+/// by [`write_report`] itself.
+fn sanitize_report_name(raw: &str) -> String {
+    let base = std::path::Path::new(raw)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+    let mut out = String::with_capacity(base.len());
+    for c in base.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let truncated: String = trimmed.chars().take(120).collect();
+    if truncated.is_empty() {
+        "report".to_string()
+    } else {
+        truncated
+    }
+}
+
+/// Append `content` to the sanitized, app-owned report file named by `name`,
+/// creating it on the first call. Returns the resolved path and the number of
+/// bytes written by this call. There is no argument, anywhere in this path,
+/// that lets the caller choose a directory — only [`report_dir`] (app-set)
+/// and the sanitized filename (derived, never a path) are ever used.
+fn write_report(name: &str, content: &str) -> Result<(PathBuf, usize), String> {
+    let dir = report_dir()?;
+    let safe_name = sanitize_report_name(name);
+    let path = dir.join(format!("{safe_name}.html"));
+
+    // Defense in depth: sanitize_report_name should already make this
+    // impossible, but double-check the resolved path never leaves `dir`.
+    if path.parent() != Some(dir.as_path()) {
+        return Err("resolved report path escaped the report directory".to_string());
+    }
+
+    use std::fs::OpenOptions;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let bytes = content.len();
+    Ok((path, bytes))
 }
 
 fn parse_window(args: &Value) -> Result<Window, String> {
@@ -237,5 +357,69 @@ fn write_message<W: Write>(out: &mut W, msg: &Value) {
         let _ = out.write_all(s.as_bytes());
         let _ = out.write_all(b"\n");
         let _ = out.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_report_name_strips_traversal() {
+        assert_eq!(sanitize_report_name("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_report_name("/etc/passwd"), "passwd");
+        assert_eq!(sanitize_report_name("a/b/../../c"), "c");
+    }
+
+    #[test]
+    fn sanitize_report_name_drops_unsafe_chars_and_extensions() {
+        assert_eq!(sanitize_report_name("report.html"), "report-html");
+        assert_eq!(sanitize_report_name("my report!!"), "my-report");
+        // `/` in the raw name is treated as a path separator (only the final
+        // segment survives `Path::file_name`), so an injected `</script>`
+        // closing tag truncates everything before the last `/`.
+        assert_eq!(sanitize_report_name("<script>alert(1)</script>"), "script");
+        assert_eq!(sanitize_report_name("weird<>name"), "weird-name");
+    }
+
+    #[test]
+    fn sanitize_report_name_falls_back_when_empty() {
+        assert_eq!(sanitize_report_name(""), "report");
+        assert_eq!(sanitize_report_name("../"), "report");
+        assert_eq!(sanitize_report_name("***"), "report");
+    }
+
+    #[test]
+    fn sanitize_report_name_preserves_safe_names() {
+        assert_eq!(sanitize_report_name("report"), "report");
+        assert_eq!(sanitize_report_name("kiro-insights_v2"), "kiro-insights_v2");
+    }
+
+    // `write_report` is gated by a process-wide env var, so these two cases
+    // share one test (rather than risk cargo's parallel test threads racing
+    // on `std::env::set_var`/`remove_var`).
+    #[test]
+    fn write_report_is_gated_by_configured_dir_and_appends_within_it() {
+        std::env::remove_var(REPORT_DIR_ENV);
+        let err = write_report("report", "<html></html>").unwrap_err();
+        assert!(err.contains("not available") || err.contains("directory"));
+
+        let dir = std::env::temp_dir().join(format!("mcp-write-report-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var(REPORT_DIR_ENV, &dir);
+
+        let (path, n1) = write_report("../../evil", "<!DOCTYPE html>").unwrap();
+        assert_eq!(path, dir.join("evil.html"));
+        assert_eq!(n1, "<!DOCTYPE html>".len());
+
+        let (path2, n2) = write_report("../../evil", "<html></html>").unwrap();
+        assert_eq!(path2, path);
+        assert_eq!(n2, "<html></html>".len());
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "<!DOCTYPE html><html></html>");
+
+        std::env::remove_var(REPORT_DIR_ENV);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
