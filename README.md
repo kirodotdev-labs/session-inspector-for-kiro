@@ -191,6 +191,10 @@ works; an authenticated internal GitLab does not).
 
 ---
 
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+
 ## License
 
-[MIT-0](LICENSE) (MIT No Attribution) — use it however you like.
+This project is licensed under the [Apache-2.0](LICENSE) License.
