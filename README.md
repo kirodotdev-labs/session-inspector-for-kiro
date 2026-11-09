@@ -198,3 +198,8 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more inform
 ## License
 
 This project is licensed under the [Apache-2.0](LICENSE) License.
+
+Third-party software and content included in the app is attributed in
+[THIRD-PARTY-LICENSES](THIRD-PARTY-LICENSES). Regenerate it with
+`pnpm third-party-licenses` (requires `cargo install cargo-about --locked`)
+whenever dependencies change and before each release.

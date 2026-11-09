@@ -37,6 +37,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../NOTICE": "NOTICE",
+      "../THIRD-PARTY-LICENSES": "THIRD-PARTY-LICENSES"
+    },
     "macOS": {
       "signingIdentity": "-"
     }

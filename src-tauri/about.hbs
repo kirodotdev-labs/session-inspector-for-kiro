@@ -1,0 +1,8 @@
+{{#each licenses}}
+@@@LICENSE {{{id}}}
+{{#each used_by}}
+@@@CRATE {{{crate.name}}} {{{crate.version}}} {{{crate.manifest_path}}}
+{{/each}}
+@@@TEXT
+{{{text}}}
+{{/each}}
