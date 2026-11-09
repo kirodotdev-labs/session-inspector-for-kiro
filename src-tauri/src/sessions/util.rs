@@ -9,7 +9,7 @@ use std::path::{Component, Path};
 /// ids) arrive over the Tauri IPC boundary and are interpolated into on-disk
 /// paths by the session loaders. Without validation, a value like
 /// `../../../../etc/hosts` or an absolute path would let a caller read files
-/// outside the Kiro data directories (see T-006 in `THREAT_MODEL.md`).
+/// outside the Kiro data directories (path traversal).
 ///
 /// We defer to the OS path parser: `s` is accepted only if it parses to
 /// exactly one [`Component::Normal`] and nothing else. This rejects empty

@@ -5,8 +5,9 @@ directly from your local Application Support folder. It's a **desktop (Tauri)**
 app — the React UI wrapped in a native shell for macOS, Windows, and Linux. No
 server required; session data is read directly from disk via Rust commands.
 
-It reads the on-disk format documented in
-[`KIRO_SESSION_FORMAT.md`](KIRO_SESSION_FORMAT.md).
+It reads the three on-disk session formats Kiro uses: IDE workspace sessions
+(`globalStorage/kiro.kiroagent/workspace-sessions`), CLI v2 sessions
+(`~/.kiro/sessions/cli`) and unified v3 sessions (`~/.kiro/sessions`).
 
 ### Layout
 

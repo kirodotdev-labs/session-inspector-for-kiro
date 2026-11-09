@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
-/// Base directory resolution, mirroring the constants at the top of
-/// `server/index.ts`. macOS paths are used directly; Windows/Linux fall back
-/// to reasonable per-OS equivalents (see TAURI_PLAN.md Task 1 — flagged as
-/// unverified for Windows).
+/// Base directory resolution. macOS paths are the ones Kiro is known to use;
+/// Windows/Linux fall back to reasonable per-OS equivalents (unverified on
+/// Windows).
 pub struct Paths {
     pub global_storage: PathBuf,
     pub sessions_dir: PathBuf,
