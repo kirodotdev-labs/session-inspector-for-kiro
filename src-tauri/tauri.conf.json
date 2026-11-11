@@ -49,7 +49,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://REPLACE-ME.example.com/kiro-sessions-inspector/latest.json"
+        "https://github.com/kirodotdev-labs/session-inspector-for-kiro/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBRjY2MzVFQzhERThFNTkKUldSWmp0N0lYbVAyR2hMb0l1T2QzcGJMa0hBRVJXRXpMQVRkcHN3UXdhMjVobVhNOTNTZ0VSMDEK"
     }
