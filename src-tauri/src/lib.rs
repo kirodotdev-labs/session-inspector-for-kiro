@@ -132,14 +132,16 @@ pub fn run() {
     .build(tauri::generate_context!())
     .expect("error while building tauri application");
 
-  app.run(|app_handle, event| {
+  app.run(|_app_handle, _event| {
     // On macOS, clicking the Dock icon while the window is hidden (rather
     // than quit — see the tray/CloseRequested handling above) doesn't
     // re-show it by default; the OS instead calls
     // `applicationShouldHandleReopen`, which Tauri surfaces as this event.
     // Without handling it, clicking the Dock icon with no visible windows
-    // does nothing.
-    if let RunEvent::Reopen { .. } = event {
+    // does nothing. `RunEvent::Reopen` only exists on macOS.
+    #[cfg(target_os = "macos")]
+    if let RunEvent::Reopen { .. } = _event {
+      let app_handle = _app_handle;
       if let Some(window) = app_handle.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
