@@ -1,0 +1,9 @@
+# Default owner for everything. Required review on main comes from the ruleset.
+*                                   @massi-ang
+
+# Security-sensitive paths. The factory treats these as forbidden and routes
+# any change to a human.
+/.github/                           @massi-ang
+/src-tauri/tauri.conf.json          @massi-ang
+/src-tauri/capabilities/            @massi-ang
+/scripts/                           @massi-ang
