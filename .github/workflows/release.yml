@@ -93,3 +93,16 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  download-aliases:
+    name: Publish latest-download links
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test installer alias mapping
+        run: python3 scripts/test_publish_download_aliases.py
+      - name: Publish stable installer filenames
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/publish_download_aliases.py

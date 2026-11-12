@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Kiro Sessions Inspector — Product tour</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --background: #0b0c14;
+        --surface: #12131d;
+        --line: #2a2c3c;
+        --text: #f2f1f7;
+        --muted: #b2aebf;
+        --accent: #bca5fb;
+      }
+
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--background); color: var(--text); font: 16px/1.6 "Avenir Next", Avenir, "Segoe UI", sans-serif; }
+      main, header, footer { width: min(1280px, calc(100% - 64px)); margin-inline: auto; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-block: 28px; border-bottom: 1px solid var(--line); }
+      .brand { display: flex; align-items: center; gap: 12px; font-weight: 650; letter-spacing: -.02em; }
+      .brand::before { content: ""; width: 6px; height: 22px; border-radius: 4px; background: var(--accent); }
+      .eyebrow, .number, .metrics { font: 11px/1.5 "SFMono-Regular", Consolas, monospace; letter-spacing: .1em; text-transform: uppercase; }
+      .metrics { color: var(--muted); }
+      .intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; padding: 38px 0 26px; }
+      .eyebrow { color: var(--accent); margin: 0 0 10px; }
+      h1 { font-size: clamp(28px, 4vw, 48px); font-weight: 550; letter-spacing: -.055em; line-height: 1.1; margin: 0 0 12px; }
+      .lede { max-width: 680px; margin: 0; color: var(--muted); }
+      .metrics { flex-shrink: 0; margin: 0 0 2px; }
+      figure { margin: 0; border: 1px solid var(--line); background: var(--background); border-radius: 12px; overflow: hidden; }
+      .player { position: relative; aspect-ratio: 1280 / 900; }
+      .player img { display: block; width: 100%; height: 100%; object-fit: contain; }
+      .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; background: var(--surface); border-top: 1px solid var(--line); padding: 15px 20px; }
+      .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+      button, .download { font: inherit; font-size: 13px; font-weight: 600; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--text); padding: 8px 14px; text-decoration: none; cursor: pointer; }
+      button:hover, .download:hover { border-color: var(--accent); color: var(--accent); }
+      button:first-child { background: var(--accent); border-color: var(--accent); color: var(--background); }
+      button:first-child:hover { background: #d1bfff; }
+      :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+      .status { margin: 0 4px; color: var(--muted); font-size: 12px; }
+      figcaption { color: var(--muted); font-size: 12px; padding: 14px 20px; border-top: 1px solid var(--line); }
+      .chapters { display: grid; grid-template-columns: repeat(4, 1fr); list-style: none; padding: 28px 0; margin: 0; gap: 24px; border-bottom: 1px solid var(--line); }
+      .number { display: block; color: var(--accent); margin-bottom: 7px; }
+      .chapter-title { display: block; font-size: 14px; font-weight: 650; }
+      .chapter-detail { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+      footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; padding-block: 24px 36px; }
+      footer p { margin: 0; }
+      footer a { color: inherit; text-underline-offset: 3px; }
+      [hidden] { display: none !important; }
+      @media (max-width: 850px) {
+        main, header, footer { width: calc(100% - 32px); }
+        .intro { display: block; padding-top: 28px; }
+        .metrics { margin-top: 18px; }
+        .chapters { grid-template-columns: repeat(3, 1fr); gap: 24px; }
+      }
+      @media (max-width: 460px) {
+        .chapters { grid-template-columns: repeat(2, 1fr); }
+        .toolbar { padding: 12px; }
+        .status { width: 100%; margin: 2px 0 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">Kiro Sessions Inspector</div>
+    </header>
+    <main>
+      <section class="intro" aria-labelledby="title">
+        <div>
+          <p class="eyebrow">A closer look</p>
+          <h1 id="title">From conversation to context.</h1>
+          <p class="lede">Explore your activity. Inspect what happened. Find the decision you need.<br />A short tour across three workspaces, with CLI v2, IDE, and unified sessions.</p>
+        </div>
+        <p class="metrics">33 seconds &nbsp; / &nbsp; 8 scenes &nbsp; / &nbsp; 1280 × 900</p>
+      </section>
+
+      <figure aria-label="Kiro Sessions Inspector animated product tour">
+        <div class="player">
+          <picture>
+            <source media="(prefers-reduced-motion: reduce)" srcset="media/kiro-sessions-inspector-demo-poster.png" />
+            <img id="tour" src="media/kiro-sessions-inspector-demo.gif" width="1280" height="900" alt="Product tour across three workspaces showing the usage dashboard, a legacy CLI v2 session, a legacy IDE session, unified session history, an expanded build command, full-text search, and the Analyze screen." />
+          </picture>
+        </div>
+        <div class="toolbar">
+          <div class="controls">
+            <button id="toggle" type="button" aria-controls="tour" hidden>Stop animation</button>
+            <button id="replay" type="button" aria-controls="tour" hidden>Replay from start</button>
+            <span id="status" class="status" role="status">Looping GIF · no audio</span>
+          </div>
+          <a class="download" href="media/kiro-sessions-inspector-demo.gif" download>Download GIF ↗</a>
+        </div>
+        <figcaption>Sanitized excerpts from five selected local sessions across three workspaces: kiro-sessions-inspector (unified), disk-usage-tool (CLI v2), and mdview (legacy IDE). Paths, identifiers, and model labels have been replaced; some content is omitted. Dashboard totals reflect the selected sessions. The Analyze screen is shown without running an analysis.</figcaption>
+      </figure>
+
+      <ol class="chapters" aria-label="Scenes in this tour">
+        <li><span class="number">01 / Overview</span><span class="chapter-title">See the bigger picture</span><span class="chapter-detail">Activity, credits, and trends.</span></li>
+        <li><span class="number">02 / CLI v2</span><span class="chapter-title">Revisit CLI history</span><span class="chapter-detail">A legacy session in disk-usage-tool.</span></li>
+        <li><span class="number">03 / IDE</span><span class="chapter-title">Explore another workspace</span><span class="chapter-detail">An earlier IDE conversation in mdview.</span></li>
+        <li><span class="number">04 / Unified</span><span class="chapter-title">Follow the conversation</span><span class="chapter-detail">Messages alongside tool calls.</span></li>
+        <li><span class="number">05 / Inspect</span><span class="chapter-title">Look inside a tool call</span><span class="chapter-detail">Command, output, and status.</span></li>
+        <li><span class="number">06 / Search</span><span class="chapter-title">Find an earlier decision</span><span class="chapter-detail">Full-text search with highlights.</span></li>
+        <li><span class="number">07 / Context</span><span class="chapter-title">Pick up the thread</span><span class="chapter-detail">Jump directly to a result.</span></li>
+        <li><span class="number">08 / Analyze</span><span class="chapter-title">Reflect on your workflow</span><span class="chapter-detail">Choose a time window and tone.</span></li>
+      </ol>
+    </main>
+    <footer>
+      <p>This preview works locally. No external scripts, fonts, or session-data requests.</p>
+      <a href="../README.md">Back to the README</a>
+    </footer>
+    <script>
+      (() => {
+        const image = document.getElementById('tour');
+        const toggle = document.getElementById('toggle');
+        const replay = document.getElementById('replay');
+        const status = document.getElementById('status');
+        const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const animation = 'media/kiro-sessions-inspector-demo.gif';
+        const poster = 'media/kiro-sessions-inspector-demo-poster.png';
+        let playing = !motion.matches;
+
+        // Control the actual GIF, not a video substitute. Stopping returns to
+        // the poster; playing or replaying starts at the beginning.
+        image.closest('picture').querySelector('source').remove();
+        function setPlaying(value) {
+          playing = value;
+          image.src = playing ? `${animation}?replay=${Date.now()}` : poster;
+          toggle.textContent = playing ? 'Stop animation' : 'Play animation';
+          status.textContent = playing ? 'Looping GIF · no audio' : 'Stopped · static preview';
+        }
+        toggle.addEventListener('click', () => setPlaying(!playing));
+        replay.addEventListener('click', () => setPlaying(true));
+        motion.addEventListener('change', event => { if (event.matches) setPlaying(false); });
+        toggle.hidden = false;
+        replay.hidden = false;
+        setPlaying(playing);
+      })();
+    </script>
+  </body>
+</html>
