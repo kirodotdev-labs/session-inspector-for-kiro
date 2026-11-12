@@ -5,7 +5,7 @@
 //! `SessionDetail` parse: for CLI JSONL sources this lets us read only the
 //! bytes appended since the last pass (append-only fast path). IDE sessions,
 //! whose turns live across separate execution files, are re-extracted in full
-//! via `get_ide_session` whenever their `session.json` fingerprint changes.
+//! from their `session.json` whenever its fingerprint changes.
 
 use rusqlite::{params, Connection};
 use serde_json::Value;
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
 
 use crate::sessions::cli::load_all_cli_session_meta;
-use crate::sessions::ide::{get_ide_session, list_ide_workspaces};
+use crate::sessions::ide::{get_ide_session_text, list_ide_workspaces};
 use crate::sessions::paths::Paths;
 
 /// Cap on indexed text per message, so a single huge tool output can't bloat
@@ -297,26 +297,23 @@ impl Descriptor {
     }
 }
 
-/// Extract (model, messages) for an IDE session via the full loader.
+/// Extract (model, messages) for an IDE session. Only the session file is
+/// read: tool calls aren't indexed, so the execution files (where all the
+/// tool input/output lives) are never loaded.
 fn extract_ide(paths: &Paths, d: &Descriptor) -> Result<(String, Vec<MsgRow>), String> {
     let dir = d.ide_dir.as_deref().unwrap_or("");
-    let detail = get_ide_session(paths, dir, &d.session_id)?;
+    let (model, messages) = get_ide_session_text(paths, dir, &d.session_id)?;
     let mut msgs = Vec::new();
-    for h in &detail.history {
-        push_history_msg(&mut msgs, &h.role, &h.content, &h.actions);
+    for (role, content) in &messages {
+        push_history_msg(&mut msgs, role, content);
     }
-    Ok((detail.model, msgs))
+    Ok((model, msgs))
 }
 
 /// Flatten a normalized history message into searchable rows. Tool calls and
 /// tool results are intentionally excluded from the index — only the user's
 /// prompts and the assistant's replies are searchable.
-fn push_history_msg(
-    out: &mut Vec<MsgRow>,
-    role: &str,
-    content: &str,
-    _actions: &[crate::sessions::types::Action],
-) {
+fn push_history_msg(out: &mut Vec<MsgRow>, role: &str, content: &str) {
     if !content.trim().is_empty() {
         out.push(MsgRow { role: role.to_string(), text: cap(content) });
     }
