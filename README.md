@@ -15,11 +15,6 @@ your usage across projects—without setting up a server.
 
 ![Kiro Sessions Inspector tour: browse three workspaces, inspect CLI v2, IDE and unified sessions, expand a tool call, search history, and configure an analysis.](docs/media/kiro-sessions-inspector-demo.gif)
 
-*A 33-second tour using sanitized excerpts from five sessions across three
-workspaces. [Static preview](docs/media/kiro-sessions-inspector-demo-poster.png)
-· [Playback page](docs/demo.html)
-(open `docs/demo.html` in a local clone for playback controls).*
-
 ## What you can do
 
 - **Browse your history.** Find IDE, CLI, and unified sessions by workspace.
