@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in Kiro Sessions Inspector doesn't work as expected
+labels: ["type:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please don't include session contents, tokens, or anything private.
+        Security issues: report via https://aws.amazon.com/security/vulnerability-reporting/ instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown in Settings → Updates ("Current version").
+      placeholder: "0.2.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Session source involved
+      multiple: true
+      options:
+        - Kiro IDE
+        - Kiro CLI
+        - Unified sessions
+        - Not sure
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages or logs
+      description: Redact paths or content you consider private.
+      render: text
