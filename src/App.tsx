@@ -35,8 +35,8 @@ export interface Action {
   actionType: string;
   rawToolName?: string;
   actionState?: string;
-  input?: Record<string, any>;
-  output?: any;
+  input?: Record<string, unknown>;
+  output?: unknown;
   /** Present only for `actionType: "subagent"` — id of the sub-agent's own
    * session; fetch its transcript via `getSubagentSession`. */
   subSessionId?: string;
@@ -86,7 +86,8 @@ function App() {
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState<View>("dashboard");
-  const [refreshing, setRefreshing] = useState(false);
+  // Starts true: the initial workspace load kicks off on mount.
+  const [refreshing, setRefreshing] = useState(true);
   // Workspace whose dashboard the Workspace tab shows. Set by picking a
   // workspace directly, or implicitly by the workspace of a selected session.
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
@@ -100,20 +101,24 @@ function App() {
       .finally(() => setRefreshing(false));
   }, []);
 
+  // Initial workspace load. `refreshing` already starts out true, so only the
+  // async completion updates state here.
   useEffect(() => {
-    loadWorkspaces();
-  }, [loadWorkspaces]);
+    listWorkspaces()
+      .then(setWorkspaces)
+      .finally(() => setRefreshing(false));
+  }, []);
 
-  useEffect(() => {
-    if (!selectedSession) return;
+  const openSession = (workspaceId: string, sessionId: string) => {
+    setSelectedSession({ workspaceId, sessionId });
+    setSelectedWorkspaceId(workspaceId);
+    setView("session");
     setLoading(true);
-    getSessionDetail(selectedSession.workspaceId, selectedSession.sessionId).then(
-      (d) => {
-        setSession(d);
-        setLoading(false);
-      },
-    );
-  }, [selectedSession]);
+    getSessionDetail(workspaceId, sessionId).then((d) => {
+      setSession(d);
+      setLoading(false);
+    });
+  };
 
   // The workspace backing the Workspace tab: an explicitly selected workspace,
   // else the one owning the selected session.
@@ -130,11 +135,7 @@ function App() {
           workspaces={workspaces}
           selectedSession={selectedSession}
           selectedWorkspaceId={activeWorkspaceId}
-          onSelect={(workspaceId, sessionId) => {
-            setSelectedSession({ workspaceId, sessionId });
-            setSelectedWorkspaceId(workspaceId);
-            setView("session");
-          }}
+          onSelect={openSession}
           onSelectWorkspace={(workspaceId) => {
             setSelectedWorkspaceId(workspaceId);
             setView("workspace");
@@ -158,11 +159,7 @@ function App() {
             <Dashboard />
           ) : view === "search" ? (
             <SearchView
-              onOpenSession={(workspaceId, sessionId) => {
-                setSelectedSession({ workspaceId, sessionId });
-                setSelectedWorkspaceId(workspaceId);
-                setView("session");
-              }}
+              onOpenSession={openSession}
             />
           ) : view === "analyze" ? (
             <AnalyzeView />

@@ -105,8 +105,17 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
   // scopes to Unified sessions only; otherwise it shows all sources.
   const { showNonUnified } = useSettings();
 
-  useEffect(() => {
+  // Show the spinner as soon as the query changes (adjusting state during
+  // render rather than inside the fetch effect). `loading` starts out true
+  // for the initial mount.
+  const queryKey = JSON.stringify([workspacePath ?? null, showNonUnified]);
+  const [loadingKey, setLoadingKey] = useState(queryKey);
+  if (loadingKey !== queryKey) {
+    setLoadingKey(queryKey);
     setLoading(true);
+  }
+
+  useEffect(() => {
     const promise = workspacePath
       ? getWorkspaceDashboard<DashboardData>(
           workspacePath,

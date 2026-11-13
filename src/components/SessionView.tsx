@@ -22,7 +22,14 @@ import {
   X,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { SessionDetail, Action, Source } from "../App";
 import { formatDuration } from "../lib/format";
 import { SOURCE_BADGE_CLASS, SOURCE_DISPLAY_NAMES } from "../lib/source";
@@ -74,38 +81,57 @@ function ActionIcon({ type }: { type: string }) {
   }
 }
 
+type UnknownRecord = Record<string, unknown>;
+
+/** Narrows a tool input/output value to a plain object, if it is one. */
+function asRecord(value: unknown): UnknownRecord | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : undefined;
+}
+
+/** First truthy value as a string (mirrors `a || b || ...` on loosely typed
+ * tool payloads), or `undefined` when none is truthy. */
+function firstText(...values: unknown[]): string | undefined {
+  for (const v of values) if (v) return String(v);
+  return undefined;
+}
+
 function describeAction(action: Action): string {
   const { actionType, input } = action;
   const i = input ?? {};
   switch (actionType) {
     case "runCommand":
-      return i.command || i.cmd || "command";
+      return firstText(i.command, i.cmd) ?? "command";
     case "readFiles": {
       // IDE: files[].path ; CLI read tool: operations[].path
       if (Array.isArray(i.files))
-        return i.files.map((f: any) => f.path).join(", ");
+        return i.files.map((f: unknown) => asRecord(f)?.path).join(", ");
       if (Array.isArray(i.operations))
         return (
           i.operations
-            .map((o: any) => o.path || o.target || "")
+            .map((o: unknown) => {
+              const r = asRecord(o);
+              return firstText(r?.path, r?.target) ?? "";
+            })
             .filter(Boolean)
             .join(", ") || "read"
         );
-      if (i.path) return i.path;
+      if (i.path) return String(i.path);
       return "read";
     }
     case "search":
-      return i.query || i.searchQuery || "search";
+      return firstText(i.query, i.searchQuery) ?? "search";
     case "replace":
     case "write":
     case "create":
-      return i.file || i.path || actionType;
+      return firstText(i.file, i.path) ?? actionType;
     case "getDiagnostics":
       return Array.isArray(i.paths) ? i.paths.join(", ") : "diagnostics";
     case "knowledge":
-      return i.command || i.query || "knowledge";
+      return firstText(i.command, i.query) ?? "knowledge";
     case "subagent":
-      return i.subAgentName || "sub-agent";
+      return firstText(i.subAgentName) ?? "sub-agent";
     default:
       return actionType;
   }
@@ -115,26 +141,23 @@ function renderOutput(action: Action): React.ReactNode {
   const { output } = action;
   if (output == null) return null;
   // CLI shell output is usually an object with exit_status/stdout/stderr
-  if (
-    typeof output === "object" &&
-    !Array.isArray(output) &&
-    (output.stdout !== undefined || output.stderr !== undefined)
-  ) {
+  const shell = asRecord(output);
+  if (shell && (shell.stdout !== undefined || shell.stderr !== undefined)) {
     return (
       <div className="space-y-1">
-        {output.exit_status && (
+        {!!shell.exit_status && (
           <div className="text-[10px] text-[var(--text-secondary)]">
-            {output.exit_status}
+            {String(shell.exit_status)}
           </div>
         )}
-        {output.stdout && (
+        {!!shell.stdout && (
           <pre className="text-[var(--text-primary)] whitespace-pre-wrap break-words">
-            {String(output.stdout)}
+            {String(shell.stdout)}
           </pre>
         )}
-        {output.stderr && (
+        {!!shell.stderr && (
           <pre className="text-[var(--text-secondary)] whitespace-pre-wrap break-words border-t border-[var(--border)] pt-1">
-            {String(output.stderr)}
+            {String(shell.stderr)}
           </pre>
         )}
       </div>
@@ -168,10 +191,7 @@ function ActionBlock({
   const isThinking = action.actionType === "reasoning";
   const isSay = action.actionType === "say";
   const isSubagent = action.actionType === "subagent";
-  const message =
-    typeof action.output === "object" && action.output !== null
-      ? action.output.message
-      : undefined;
+  const message = firstText(asRecord(action.output)?.message);
 
   if (isSay && message) {
     return (
@@ -238,7 +258,7 @@ function ActionBlock({
               {JSON.stringify(action.input, null, 2)}
             </pre>
           )}
-          {action.output && (
+          {!!action.output && (
             <div className="mt-1 border-t border-[var(--border)] pt-1">
               {renderOutput(action)}
             </div>
@@ -303,25 +323,23 @@ function SubAgentPane({
   selection: SubagentSelection;
   onClose: () => void;
 }) {
+  // The parent keys this pane by session + sub-session id, so switching to a
+  // different sub-agent remounts it with fresh (loading) state.
   const [trace, setTrace] = useState<SessionDetail | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { action, subSessionId } = selection;
 
   useEffect(() => {
-    setTrace(null);
-    setLoading(true);
-    setError(null);
     getSubagentSession(sessionId, subSessionId)
       .then(setTrace)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
   }, [sessionId, subSessionId]);
 
-  const prompt: string | undefined = action.input?.prompt;
+  const prompt = firstText(action.input?.prompt);
   const isError = action.actionState === "Error";
-  const errorMessage: string | undefined =
-    typeof action.output === "object" ? action.output?.errorMessage : undefined;
+  const errorMessage = firstText(asRecord(action.output)?.errorMessage);
 
   return (
     <div className="h-full flex flex-col">
@@ -586,7 +604,11 @@ function ResizeHandle({ onResize }: { onResize: (deltaX: number) => void }) {
   const draggingRef = useRef(false);
   const lastXRef = useRef(0);
   const onResizeRef = useRef(onResize);
-  onResizeRef.current = onResize;
+  // Keep the latest callback for the window listeners below; refs must not
+  // be written during render.
+  useLayoutEffect(() => {
+    onResizeRef.current = onResize;
+  }, [onResize]);
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
@@ -738,6 +760,7 @@ export function SessionView({ session }: Props) {
             style={{ width: paneWidth }}
           >
             <SubAgentPane
+              key={`${session.sessionId}/${selection.subSessionId}`}
               sessionId={session.sessionId}
               selection={selection}
               onClose={() => setSelection(null)}
