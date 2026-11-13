@@ -49,8 +49,8 @@ export function AnalysesView({ reloadKey }: { reloadKey?: string | number }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const desktop = isDesktop();
 
-  const refresh = useCallback(() => {
-    setLoading(true);
+  // Fetches the list; callers are responsible for setting `loading` first.
+  const fetchList = useCallback(() => {
     listAnalyses()
       .then((list) => {
         setItems(list);
@@ -60,10 +60,24 @@ export function AnalysesView({ reloadKey }: { reloadKey?: string | number }) {
       .finally(() => setLoading(false));
   }, []);
 
+  const refresh = useCallback(() => {
+    setLoading(true);
+    fetchList();
+  }, [fetchList]);
+
+  // Show the spinner as soon as `reloadKey` changes (adjusting state during
+  // render rather than in the effect below). `loading` starts out true for
+  // the initial mount.
+  const [loadingKey, setLoadingKey] = useState(reloadKey);
+  if (loadingKey !== reloadKey) {
+    setLoadingKey(reloadKey);
+    setLoading(true);
+  }
+
   // Reload on mount and whenever `reloadKey` changes (e.g. a new run finished).
   useEffect(() => {
-    refresh();
-  }, [refresh, reloadKey]);
+    fetchList();
+  }, [fetchList, reloadKey]);
 
   const open = async (id: string) => {
     setError(null);

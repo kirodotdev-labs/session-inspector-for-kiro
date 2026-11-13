@@ -105,7 +105,12 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
         /* ignore */
       }
     })();
-    void runCheck(false); // silent startup check
+    // Silent startup check. Yield a microtask first so its state updates
+    // happen asynchronously rather than synchronously in the effect body.
+    void (async () => {
+      await Promise.resolve();
+      await runCheck(false);
+    })();
   }, [runCheck]);
 
   return (
