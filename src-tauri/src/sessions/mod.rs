@@ -5,3 +5,4 @@ pub mod ide;
 pub mod paths;
 pub mod types;
 pub mod util;
+pub mod workflow;

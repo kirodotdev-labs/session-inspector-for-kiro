@@ -281,6 +281,7 @@ pub fn list_ide_workspaces(paths: &Paths) -> Vec<Workspace> {
                     .or_else(|| s.get("dateCreated").and_then(|v| v.as_i64()))
                     .unwrap_or(0),
                 source: Source::Ide,
+                workflow_id: None,
             })
             .collect();
         out.push(Workspace {
@@ -290,6 +291,7 @@ pub fn list_ide_workspaces(paths: &Paths) -> Vec<Workspace> {
             name: project_name,
             session_count: session_summaries.len(),
             sessions: session_summaries,
+            workflows: Vec::new(),
         });
     }
     out
