@@ -77,11 +77,12 @@ function mergeWorkspaces(workspaces: Workspace[]): MergedWorkspace[] {
       merged.workflows.push({ run, workspaceId: ws.id });
     }
   }
-  return Array.from(byPath.values()).sort((a, b) => {
-    const aLatest = a.sessions.reduce((max, s) => Math.max(max, s.date), 0);
-    const bLatest = b.sessions.reduce((max, s) => Math.max(max, s.date), 0);
-    return bLatest - aLatest;
-  });
+  const latest = (ws: MergedWorkspace) =>
+    Math.max(
+      ws.sessions.reduce((max, s) => Math.max(max, s.date), 0),
+      ws.workflows.reduce((max, w) => Math.max(max, w.run.lastActivityAt), 0),
+    );
+  return Array.from(byPath.values()).sort((a, b) => latest(b) - latest(a));
 }
 
 type WorkspaceRow =

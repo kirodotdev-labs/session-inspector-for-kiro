@@ -35,8 +35,9 @@ fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
-/// Every `workflows/*/` directory under the v3 session root that holds a
-/// `workflow-state.json` or `workflow-definition.json`.
+/// Every `workflows/*/` directory under the v3 session root that holds any
+/// of the run files (`workflow-state.json`, `workflow-definition.json`,
+/// `sessions.json`).
 fn find_workflow_dirs(v3_root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Ok(ws_dirs) = fs::read_dir(v3_root) else {
@@ -51,8 +52,9 @@ fn find_workflow_dirs(v3_root: &Path) -> Vec<PathBuf> {
         };
         for e in entries.flatten() {
             let p = e.path();
-            if p.join("workflow-state.json").is_file()
-                || p.join("workflow-definition.json").is_file()
+            if ["workflow-state.json", "workflow-definition.json", "sessions.json"]
+                .iter()
+                .any(|f| p.join(f).is_file())
             {
                 out.push(p);
             }
@@ -93,32 +95,62 @@ fn parse_node(v: &Value, session_by_node: &HashMap<String, String>) -> WorkflowN
 
 /// Parses one `workflows/{id}/` directory. Returns the run plus the
 /// definition's own name, which is only a fallback (`runLabel` and the step
-/// sessions' `workflowName` are the user-facing names).
+/// sessions' `workflowName` are the user-facing names). Each file is
+/// optional: the node tree comes from the state file, else the definition,
+/// else the `sessions.json` node -> session mapping.
 fn load_workflow_dir(dir: &Path) -> Option<(WorkflowRun, Option<String>)> {
     let state = read_json(&dir.join("workflow-state.json"));
     let definition = read_json(&dir.join("workflow-definition.json"));
-    if state.is_none() && definition.is_none() {
+    let sessions_file = read_json(&dir.join("sessions.json"));
+    if state.is_none() && definition.is_none() && sessions_file.is_none() {
         return None;
     }
     let state = state.unwrap_or(Value::Null);
 
-    let session_by_node: HashMap<String, String> = read_json(&dir.join("sessions.json"))
-        .and_then(|v| v.get("sessions").and_then(|s| s.as_array()).cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|s| Some((str_field(s, "nodeId")?, str_field(s, "sessionId")?)))
-        .collect();
+    // (nodeId, sessionId) in file order; the last entry for a node wins in
+    // the lookup map.
+    let session_entries: Vec<(String, String)> = sessions_file
+        .as_ref()
+        .and_then(|v| v.get("sessions").and_then(|s| s.as_array()))
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| Some((str_field(s, "nodeId")?, str_field(s, "sessionId")?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let session_by_node: HashMap<String, String> = session_entries.iter().cloned().collect();
 
-    let steps_value = state
+    let tree = state
         .get("root")
         .and_then(|r| r.get("children"))
-        .or_else(|| definition.as_ref().and_then(|d| d.get("steps")))
-        .and_then(|s| s.as_array());
-    let steps: Vec<WorkflowNode> = steps_value
-        .map(|a| a.iter().map(|n| parse_node(n, &session_by_node)).collect())
-        .unwrap_or_default();
+        .and_then(|s| s.as_array())
+        .filter(|a| !a.is_empty())
+        .or_else(|| {
+            definition
+                .as_ref()
+                .and_then(|d| d.get("steps"))
+                .and_then(|s| s.as_array())
+                .filter(|a| !a.is_empty())
+        });
+    let steps: Vec<WorkflowNode> = match tree {
+        Some(a) => a.iter().map(|n| parse_node(n, &session_by_node)).collect(),
+        None => {
+            let mut seen = HashSet::new();
+            session_entries
+                .iter()
+                .filter(|(node, _)| seen.insert(node.as_str()))
+                .map(|(node, _)| WorkflowNode {
+                    node_id: node.clone(),
+                    node_type: "step".to_string(),
+                    session_id: session_by_node.get(node).cloned(),
+                    ..Default::default()
+                })
+                .collect()
+        }
+    };
 
     let id = str_field(&state, "workflowId")
+        .or_else(|| sessions_file.as_ref().and_then(|v| str_field(v, "workflowId")))
         .or_else(|| dir.file_name().map(|n| n.to_string_lossy().to_string()))?;
     let fallback_name = str_field(&state, "workflowName")
         .or_else(|| definition.as_ref().and_then(|d| str_field(d, "name")));
@@ -163,13 +195,17 @@ pub fn run_session_ids(run: &WorkflowRun) -> Vec<&str> {
     ids
 }
 
-/// Fills in what the run files don't carry from its step sessions, appends
-/// step sessions the tree doesn't reference (so no step is ever unreachable),
-/// and computes the aggregate fields.
-fn reconcile(run: &mut WorkflowRun, steps: &[&CliSessionMeta], fallback_name: Option<String>) {
-    let by_id: HashMap<&str, &CliSessionMeta> =
-        steps.iter().map(|m| (m.session_id.as_str(), *m)).collect();
-
+/// Fills in what the run files don't carry from its sessions, appends step
+/// sessions the tree doesn't reference (so no step is ever unreachable),
+/// and computes the aggregate fields. `steps` are the sessions tagged with
+/// this run's `_meta.kiro.workflow`; `all_by_id` is every v3 session, so
+/// nodes linked to a session without that tag are still filled in.
+fn reconcile(
+    run: &mut WorkflowRun,
+    steps: &[&CliSessionMeta],
+    all_by_id: &HashMap<&str, &CliSessionMeta>,
+    fallback_name: Option<String>,
+) {
     if run.name.is_empty() {
         run.name = steps
             .iter()
@@ -210,7 +246,7 @@ fn reconcile(run: &mut WorkflowRun, steps: &[&CliSessionMeta], fallback_name: Op
     let mut last = run.created_at;
     let mut total = 0.0;
     visit_nodes_mut(&mut run.steps, &mut |n| {
-        if let Some(m) = n.session_id.as_deref().and_then(|id| by_id.get(id)) {
+        if let Some(m) = n.session_id.as_deref().and_then(|id| all_by_id.get(id)) {
             if n.credits == 0.0 {
                 n.credits = m.total_cost;
             }
@@ -264,10 +300,15 @@ pub fn load_workflow_runs(paths: &Paths, sessions: &[CliSessionMeta]) -> Vec<Wor
         });
     }
 
+    let all_by_id: HashMap<&str, &CliSessionMeta> = sessions
+        .iter()
+        .filter(|s| s.version == 3)
+        .map(|s| (s.session_id.as_str(), s))
+        .collect();
     runs.into_values()
         .map(|(mut run, fallback)| {
             let steps = steps_by_run.get(run.id.as_str()).cloned().unwrap_or_default();
-            reconcile(&mut run, &steps, fallback);
+            reconcile(&mut run, &steps, &all_by_id, fallback);
             run
         })
         .collect()
@@ -449,6 +490,36 @@ mod tests {
         assert_eq!(run.name, "def-name");
         assert_eq!(run.steps[0].agent_name.as_deref(), Some("wf-coder"));
         assert_eq!(run.steps[1].children[0].node_id, "inner");
+    }
+
+    #[test]
+    fn sessions_json_alone_recovers_run_and_links_untagged_sessions() {
+        let paths = temp_paths();
+        let d = wf_dir(&paths);
+        fs::write(d.join("workflow-state.json"), "{not json").unwrap();
+        fs::write(d.join("workflow-definition.json"), "[]").unwrap();
+        let sessions = json!({"workflowId": WF, "sessions": [
+            {"nodeId": "a", "sessionId": "sess_a1"},
+            {"nodeId": "b", "sessionId": "sess_b"},
+            {"nodeId": "a", "sessionId": "sess_a2"}
+        ]});
+        fs::write(d.join("sessions.json"), sessions.to_string()).unwrap();
+        let mut untagged = step_meta("sess_b", "b", 4.0, 1, 7);
+        untagged.workflow = None;
+
+        let runs = load_workflow_runs(&paths, &[untagged]);
+        assert_eq!(runs.len(), 1);
+        let run = &runs[0];
+        assert_eq!(run.id, WF);
+        let steps: Vec<(&str, Option<&str>)> = run
+            .steps
+            .iter()
+            .map(|n| (n.node_id.as_str(), n.session_id.as_deref()))
+            .collect();
+        assert_eq!(steps, [("a", Some("sess_a2")), ("b", Some("sess_b"))]);
+        assert_eq!(run.steps[1].credits, 4.0, "untagged linked session still fills in");
+        assert_eq!(run.steps[1].model_id.as_deref(), Some("model-x"));
+        assert_eq!(run.last_activity_at, 7);
     }
 
     #[test]

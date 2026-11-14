@@ -355,7 +355,11 @@ fn base64_url_encode(input: &str) -> String {
 /// Grouped by (source, cwd) so v2 and v3 never merge, even when they share a cwd.
 pub fn list_cli_workspaces(paths: &Paths) -> Vec<Workspace> {
     let sessions = load_all_cli_session_meta(paths);
-    let mut runs = load_workflow_runs(paths, &sessions);
+    let runs = load_workflow_runs(paths, &sessions);
+    group_cli_workspaces(sessions, runs)
+}
+
+fn group_cli_workspaces(sessions: Vec<CliSessionMeta>, mut runs: Vec<WorkflowRun>) -> Vec<Workspace> {
     let mut by_source_cwd: HashMap<String, (Source, String, Vec<CliSessionMeta>)> = HashMap::new();
 
     // A run is shown in the Unified workspace that holds its step sessions
@@ -371,6 +375,13 @@ pub fn list_cli_workspaces(paths: &Paths) -> Vec<Workspace> {
             .entry(run_workspace_path(&run, &cwd_by_session))
             .or_default()
             .push(run);
+    }
+    // Every run gets a Unified workspace, even one with no sessions on disk
+    // (e.g. before any step has started).
+    for cwd in runs_by_cwd.keys() {
+        by_source_cwd
+            .entry(format!("{}|{}", Source::Unified.as_str(), cwd))
+            .or_insert_with(|| (Source::Unified, cwd.clone(), Vec::new()));
     }
 
     for s in sessions {
@@ -984,4 +995,65 @@ pub fn get_subagent_trace(
         cli_version: None,
         history,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sessions::types::WorkflowNode;
+
+    fn v3_meta(id: &str, cwd: &str) -> CliSessionMeta {
+        CliSessionMeta {
+            session_id: id.to_string(),
+            title: id.to_string(),
+            cwd: cwd.to_string(),
+            created_at: 1,
+            updated_at: 2,
+            model: "m".to_string(),
+            agent_name: "a".to_string(),
+            context_usage: 0.0,
+            total_cost: 0.0,
+            turn_count: 1,
+            version: 3,
+            v3_dir: None,
+            workflow: None,
+        }
+    }
+
+    fn run(id: &str, workspace_path: &str, step_session: Option<&str>) -> WorkflowRun {
+        WorkflowRun {
+            id: id.to_string(),
+            name: id.to_string(),
+            status: Some("pending".to_string()),
+            workspace_path: workspace_path.to_string(),
+            parent_session_id: None,
+            created_at: 0,
+            last_activity_at: 0,
+            total_credits: 0.0,
+            steps: vec![WorkflowNode {
+                node_id: "s".to_string(),
+                node_type: "step".to_string(),
+                session_id: step_session.map(str::to_string),
+                ..Default::default()
+            }],
+        }
+    }
+
+    #[test]
+    fn workflow_without_sessions_still_gets_a_workspace() {
+        let sessions = vec![v3_meta("sess_1", "/proj")];
+        let runs = vec![run("wf_only", "/only-wf", None), run("wf_proj", "/elsewhere", Some("sess_1"))];
+        let workspaces = group_cli_workspaces(sessions, runs);
+        assert_eq!(workspaces.len(), 2);
+
+        let only = workspaces.iter().find(|w| w.path == "/only-wf").unwrap();
+        assert_eq!(only.source, Source::Unified);
+        assert_eq!(only.session_count, 0);
+        assert_eq!(only.workflows.len(), 1);
+        assert_eq!(only.workflows[0].id, "wf_only");
+
+        let proj = workspaces.iter().find(|w| w.path == "/proj").unwrap();
+        assert_eq!(proj.session_count, 1);
+        assert_eq!(proj.workflows[0].id, "wf_proj", "listed with its step session's cwd");
+    }
 }
