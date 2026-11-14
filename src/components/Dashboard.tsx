@@ -7,6 +7,7 @@ import {
   TrendingUp,
   Clock,
   LoaderCircle,
+  Workflow,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { formatDuration } from "../lib/format";
@@ -72,6 +73,7 @@ interface DashboardData {
   totalSessions: number;
   totalExecutions: number;
   totalDuration: number;
+  totalWorkflows: number;
   daily: DailyStats[];
   modelUsage: Record<string, number>;
   modelSessions: Record<string, number>;
@@ -222,7 +224,7 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
       <h2 className="text-lg font-medium">{title}</h2>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-6 gap-4">
         <StatCard
           icon={<Coins size={16} />}
           label="Total Credits"
@@ -232,6 +234,11 @@ export function Dashboard({ workspacePath, workspaceName }: DashboardProps = {})
           icon={<Layers size={16} />}
           label="Sessions"
           value={String(data.totalSessions)}
+        />
+        <StatCard
+          icon={<Workflow size={16} />}
+          label="Workflows"
+          value={String(data.totalWorkflows)}
         />
         <StatCard
           icon={<Activity size={16} />}

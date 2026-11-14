@@ -6,6 +6,7 @@ use std::fs;
 use std::time::UNIX_EPOCH;
 
 use super::cli::load_all_cli_session_meta;
+use super::workflow::{load_workflow_runs, run_workspace_path};
 use super::exec_cache::{self, ExecSummary};
 use super::paths::Paths;
 use super::types::{DailyStats, DashboardData, Source, SourceStat, WorkspaceStat};
@@ -435,6 +436,25 @@ pub fn compute_dashboard(
         );
     }
 
+    // --- Workflow runs (Unified only), attributed to workspaces the same way
+    // the sidebar lists them. ---
+    let total_workflows = if source_filter.is_none() || source_filter == Some(Source::Unified) {
+        let cwd_by_session: HashMap<&str, &str> = cli_sessions
+            .iter()
+            .filter(|s| s.version == 3)
+            .map(|s| (s.session_id.as_str(), s.cwd.as_str()))
+            .collect();
+        load_workflow_runs(paths, &cli_sessions)
+            .iter()
+            .filter(|r| match filter_path {
+                Some(fp) => run_workspace_path(r, &cwd_by_session) == fp,
+                None => true,
+            })
+            .count() as u64
+    } else {
+        0
+    };
+
     let mut daily: Vec<DailyStats> = daily_stats.into_values().collect();
     daily.sort_by(|a, b| a.date.cmp(&b.date));
     let mut workspaces: Vec<WorkspaceStat> = workspace_stats.into_values().collect();
@@ -445,6 +465,7 @@ pub fn compute_dashboard(
         total_sessions,
         total_executions,
         total_duration,
+        total_workflows,
         daily,
         model_usage,
         model_sessions,

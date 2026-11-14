@@ -20,6 +20,8 @@ import {
   LoaderCircle,
   AlertTriangle,
   X,
+  ChevronLeft,
+  Workflow,
 } from "lucide-react";
 import { clsx } from "clsx";
 import {
@@ -30,15 +32,106 @@ import {
   useRef,
   useState,
 } from "react";
-import type { SessionDetail, Action, Source } from "../App";
+import type { SessionDetail, Action, Source, WorkflowRun } from "../App";
 import { formatDuration } from "../lib/format";
 import { SOURCE_BADGE_CLASS, SOURCE_DISPLAY_NAMES } from "../lib/source";
 import { SourceIcon } from "./SourceIcon";
+import { WorkflowStatusIcon } from "./WorkflowStatusIcon";
 import { useSettings } from "../lib/useSettings";
 import { getSubagentSession } from "../lib/api";
+import { flattenNodes, leafNodes, statusLabel } from "../lib/workflow";
 
 interface Props {
   session: SessionDetail;
+  /** Set when this session is a step of a workflow run. */
+  workflow?: SessionWorkflowContext | null;
+  onOpenSession?: (workspaceId: string, sessionId: string) => void;
+}
+
+export interface SessionWorkflowContext {
+  run: WorkflowRun;
+  /** Workspace id the run's step sessions load through. */
+  workspaceId: string;
+  /** The session that launched the run, when it's on disk. */
+  parent: { workspaceId: string; title: string } | null;
+}
+
+/** "Workflow: name · status · Step N of M · Created by …" with links to
+ * the previous/next step that has a session. */
+function WorkflowBar({
+  sessionId,
+  workflow,
+  onOpenSession,
+}: {
+  sessionId: string;
+  workflow: SessionWorkflowContext;
+  onOpenSession?: (workspaceId: string, sessionId: string) => void;
+}) {
+  const { run, workspaceId, parent } = workflow;
+  const leaves = leafNodes(run.steps);
+  const position = leaves.findIndex((n) => n.sessionId === sessionId);
+  const withSessions = flattenNodes(run.steps).filter((n) => n.sessionId);
+  const idx = withSessions.findIndex((n) => n.sessionId === sessionId);
+  const prev = idx > 0 ? withSessions[idx - 1] : null;
+  const next = idx >= 0 && idx < withSessions.length - 1 ? withSessions[idx + 1] : null;
+  const status = statusLabel(run.status);
+  const navBtn =
+    "flex items-center gap-0.5 px-1.5 py-0.5 rounded hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--text-secondary)]";
+  return (
+    <div className="flex items-center gap-2 mb-3 px-3 py-1.5 rounded-md bg-[var(--bg-tertiary)] text-xs text-[var(--text-secondary)]">
+      <Workflow size={12} className="shrink-0 text-violet-400" />
+      <span className="flex items-center gap-1.5 min-w-0 flex-1 flex-wrap">
+        <span>
+          Workflow: <span className="text-[var(--text-primary)] font-medium">{run.name}</span>
+        </span>
+        {status && (
+          <span className="flex items-center gap-1">
+            · <WorkflowStatusIcon status={run.status} size={11} /> {status}
+          </span>
+        )}
+        {position >= 0 && (
+          <span>
+            · Step {position + 1} of {leaves.length}
+          </span>
+        )}
+        {run.parentSessionId && (
+          <span className="min-w-0 truncate">
+            · Created by{" "}
+            {parent && onOpenSession ? (
+              <button
+                onClick={() => onOpenSession(parent.workspaceId, run.parentSessionId!)}
+                className="text-violet-300 hover:underline"
+              >
+                {parent.title || "Untitled session"}
+              </button>
+            ) : (
+              <span className="font-mono">{run.parentSessionId}</span>
+            )}
+          </span>
+        )}
+      </span>
+      {onOpenSession && (
+        <span className="flex items-center gap-1 shrink-0">
+          <button
+            disabled={!prev}
+            onClick={() => prev && onOpenSession(workspaceId, prev.sessionId!)}
+            title={prev ? `Previous step: ${prev.nodeId}` : "No previous step"}
+            className={navBtn}
+          >
+            <ChevronLeft size={12} /> Prev
+          </button>
+          <button
+            disabled={!next}
+            onClick={() => next && onOpenSession(workspaceId, next.sessionId!)}
+            title={next ? `Next step: ${next.nodeId}` : "No next step"}
+            className={navBtn}
+          >
+            Next <ChevronRight size={12} />
+          </button>
+        </span>
+      )}
+    </div>
+  );
 }
 
 /** A selected "subagent" action, shown in the right-hand pane. Selection
@@ -646,7 +739,7 @@ function ResizeHandle({ onResize }: { onResize: (deltaX: number) => void }) {
   );
 }
 
-export function SessionView({ session }: Props) {
+export function SessionView({ session, workflow, onOpenSession }: Props) {
   const isCli = session.source === "cli";
   const { showNonUnified } = useSettings();
   const [selection, setSelection] = useState<SubagentSelection | null>(null);
@@ -678,6 +771,13 @@ export function SessionView({ session }: Props) {
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto p-6">
           <div className="mb-6">
+            {workflow && (
+              <WorkflowBar
+                sessionId={session.sessionId}
+                workflow={workflow}
+                onOpenSession={onOpenSession}
+              />
+            )}
             <div className="flex items-center gap-2 mb-2">
               {/* Unified sessions are the default/only kind once non-unified
                   sessions are hidden, so the source badge is redundant there. */}

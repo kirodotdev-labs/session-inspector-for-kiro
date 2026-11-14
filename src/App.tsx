@@ -3,6 +3,7 @@ import { LoaderCircle } from "lucide-react";
 import { clsx } from "clsx";
 import { Sidebar } from "./components/Sidebar";
 import { SessionView } from "./components/SessionView";
+import type { SessionWorkflowContext } from "./components/SessionView";
 import { Dashboard } from "./components/Dashboard";
 import { AnalyzeView } from "./components/AnalyzeView";
 import { SearchView } from "./components/SearchView";
@@ -11,6 +12,7 @@ import { Tabs } from "./components/Tabs";
 import { UpdateBanner } from "./components/UpdateBanner";
 import type { Source } from "./lib/source";
 import { listWorkspaces, getSessionDetail } from "./lib/api";
+import { findRunForSession } from "./lib/workflow";
 
 export type { Source };
 
@@ -28,7 +30,47 @@ export interface Workspace {
   path: string;
   name: string;
   sessionCount: number;
-  sessions: { id: string; title: string; date: number; source: Source }[];
+  sessions: {
+    id: string;
+    title: string;
+    date: number;
+    source: Source;
+    /** Set when the session is a step of a Kiro workflow run. */
+    workflowId?: string;
+  }[];
+  /** Kiro workflow runs in this workspace (Unified workspaces only). */
+  workflows: WorkflowRun[];
+}
+
+/** One node of a workflow run: a step, or a group such as `repeat`. */
+export interface WorkflowNode {
+  nodeId: string;
+  type: string;
+  /** Kiro's own status, e.g. "completed", "running", "pending". */
+  status: string | null;
+  agentName: string | null;
+  modelId: string | null;
+  effortLevel: string | null;
+  /** The step's own session; absent for steps that haven't started. */
+  sessionId: string | null;
+  startedAt: number | null;
+  endedAt: number | null;
+  credits: number;
+  children: WorkflowNode[];
+}
+
+/** One execution of a Kiro workflow. */
+export interface WorkflowRun {
+  id: string;
+  name: string;
+  status: string | null;
+  workspacePath: string;
+  /** The session that launched the run. */
+  parentSessionId: string | null;
+  createdAt: number;
+  lastActivityAt: number;
+  totalCredits: number;
+  steps: WorkflowNode[];
 }
 
 export interface Action {
@@ -75,6 +117,25 @@ export interface SessionDetail {
     blocks?: Block[];
     cost?: number;
   }[];
+}
+
+/** The workflow run a session is a step of, with its launching session. */
+function workflowContextFor(
+  workspaces: Workspace[],
+  sessionId: string,
+): SessionWorkflowContext | null {
+  const found = findRunForSession(workspaces, sessionId);
+  if (!found) return null;
+  const parentId = found.run.parentSessionId;
+  let parent: SessionWorkflowContext["parent"] = null;
+  for (const ws of parentId ? workspaces : []) {
+    const s = ws.sessions.find((x) => x.id === parentId);
+    if (s) {
+      parent = { workspaceId: ws.id, title: s.title };
+      break;
+    }
+  }
+  return { ...found, parent };
 }
 
 function App() {
@@ -189,7 +250,12 @@ function App() {
               Loading session...
             </div>
           ) : session ? (
-            <SessionView key={session.sessionId} session={session} />
+            <SessionView
+              key={session.sessionId}
+              session={session}
+              workflow={workflowContextFor(workspaces, session.sessionId)}
+              onOpenSession={openSession}
+            />
           ) : (
             <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
               <div className="text-center">

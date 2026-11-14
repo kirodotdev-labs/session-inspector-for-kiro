@@ -40,6 +40,10 @@ pub struct SessionSummary {
     pub title: String,
     pub date: i64,
     pub source: Source,
+    /// Set when this session is a step of a Kiro workflow run — the
+    /// `WorkflowRun.id` it belongs to.
+    #[serde(rename = "workflowId", skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +55,57 @@ pub struct Workspace {
     #[serde(rename = "sessionCount")]
     pub session_count: usize,
     pub sessions: Vec<SessionSummary>,
+    /// Kiro workflow runs whose sessions live in this workspace (Unified only).
+    pub workflows: Vec<WorkflowRun>,
+}
+
+/// One execution of a Kiro workflow, rebuilt from
+/// `{v3SessionsDir}/{hash}/workflows/{workflowId}/workflow-state.json` (or,
+/// when that file is unavailable, from the step sessions' own
+/// `_meta.kiro.workflow` blocks — see `workflow.rs`).
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowRun {
+    pub id: String,
+    pub name: String,
+    /// Kiro's own run status (e.g. "running", "completed"), as written.
+    pub status: Option<String>,
+    #[serde(rename = "workspacePath")]
+    pub workspace_path: String,
+    /// The session that launched the run.
+    #[serde(rename = "parentSessionId")]
+    pub parent_session_id: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    /// Latest activity across the run and its step sessions, in ms.
+    #[serde(rename = "lastActivityAt")]
+    pub last_activity_at: i64,
+    #[serde(rename = "totalCredits")]
+    pub total_credits: f64,
+    pub steps: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct WorkflowNode {
+    #[serde(rename = "nodeId")]
+    pub node_id: String,
+    /// "step", "repeat", "sequence", … — passed through as written.
+    #[serde(rename = "type")]
+    pub node_type: String,
+    pub status: Option<String>,
+    #[serde(rename = "agentName")]
+    pub agent_name: Option<String>,
+    #[serde(rename = "modelId")]
+    pub model_id: Option<String>,
+    #[serde(rename = "effortLevel")]
+    pub effort_level: Option<String>,
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
+    #[serde(rename = "startedAt")]
+    pub started_at: Option<i64>,
+    #[serde(rename = "endedAt")]
+    pub ended_at: Option<i64>,
+    pub credits: f64,
+    pub children: Vec<WorkflowNode>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -253,6 +308,9 @@ pub struct DashboardData {
     pub total_executions: u64,
     #[serde(rename = "totalDuration")]
     pub total_duration: i64,
+    /// Number of Kiro workflow runs in scope.
+    #[serde(rename = "totalWorkflows")]
+    pub total_workflows: u64,
     pub daily: Vec<DailyStats>,
     #[serde(rename = "modelUsage")]
     pub model_usage: HashMap<String, f64>,

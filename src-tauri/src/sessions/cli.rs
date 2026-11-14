@@ -7,8 +7,11 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::paths::Paths;
-use super::types::{Action, HistoryMsg, SessionDetail, SessionSummary, Source, Workspace};
+use super::types::{
+    Action, HistoryMsg, SessionDetail, SessionSummary, Source, WorkflowRun, Workspace,
+};
 use super::util::{is_safe_path_component, normalize_cli_tool_type};
+use super::workflow::{load_workflow_runs, run_workspace_path};
 
 // ---------------------------------------------------------------------------
 // CLI sessions (~/.kiro/sessions/cli) + CLI v3 / Unified
@@ -31,6 +34,34 @@ pub struct CliSessionMeta {
     pub version: u8,
     /// v3 only: directory containing session.json + messages.jsonl
     pub v3_dir: Option<PathBuf>,
+    /// v3 only: set when the session is a Kiro workflow step
+    /// (`_meta.kiro.workflow` in session.json).
+    pub workflow: Option<WorkflowStepRef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkflowStepRef {
+    pub workflow_id: String,
+    pub workflow_name: String,
+    pub node_id: String,
+    /// `_meta.kiro.serverSession.ownerSessionId` — the session that launched the run.
+    pub owner_session_id: Option<String>,
+}
+
+pub(super) fn parse_workflow_step_ref(data: &Value) -> Option<WorkflowStepRef> {
+    let kiro = data.get("_meta")?.get("kiro")?;
+    let wf = kiro.get("workflow")?;
+    let str_of = |v: &Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    let workflow_id = str_of(wf, "workflowId").filter(|s| !s.is_empty())?;
+    Some(WorkflowStepRef {
+        workflow_name: str_of(wf, "workflowName").unwrap_or_default(),
+        node_id: str_of(wf, "nodeId").unwrap_or_default(),
+        owner_session_id: kiro
+            .get("serverSession")
+            .and_then(|s| str_of(s, "ownerSessionId"))
+            .or_else(|| str_of(data, "rootConversationId")),
+        workflow_id,
+    })
 }
 
 fn now_ms() -> i64 {
@@ -43,7 +74,7 @@ fn now_ms() -> i64 {
 /// Best-effort ISO-8601 timestamp parse mirroring JS `Date.parse`. Returns 0
 /// on failure like the TS server's `... ? Date.parse(...) : 0` pattern would
 /// after a NaN (we treat NaN as 0 too, matching downstream arithmetic use).
-fn parse_iso_ms(s: &str) -> i64 {
+pub(super) fn parse_iso_ms(s: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.timestamp_millis())
         .unwrap_or(0)
@@ -124,6 +155,7 @@ fn load_cli_session_meta(file: &Path) -> Option<CliSessionMeta> {
         turn_count: turns.len() as u64,
         version: 2,
         v3_dir: None,
+        workflow: None,
     })
 }
 
@@ -223,6 +255,7 @@ fn load_cli_v3_session_meta(session_dir: &Path) -> Option<CliSessionMeta> {
         turn_count,
         version: 3,
         v3_dir: Some(session_dir.to_path_buf()),
+        workflow: parse_workflow_step_ref(&data),
     })
 }
 
@@ -322,7 +355,23 @@ fn base64_url_encode(input: &str) -> String {
 /// Grouped by (source, cwd) so v2 and v3 never merge, even when they share a cwd.
 pub fn list_cli_workspaces(paths: &Paths) -> Vec<Workspace> {
     let sessions = load_all_cli_session_meta(paths);
+    let mut runs = load_workflow_runs(paths, &sessions);
     let mut by_source_cwd: HashMap<String, (Source, String, Vec<CliSessionMeta>)> = HashMap::new();
+
+    // A run is shown in the Unified workspace that holds its step sessions
+    // (falling back to the run's own recorded workspace path).
+    let cwd_by_session: HashMap<&str, &str> = sessions
+        .iter()
+        .filter(|s| s.version == 3)
+        .map(|s| (s.session_id.as_str(), s.cwd.as_str()))
+        .collect();
+    let mut runs_by_cwd: HashMap<String, Vec<WorkflowRun>> = HashMap::new();
+    for run in runs.drain(..) {
+        runs_by_cwd
+            .entry(run_workspace_path(&run, &cwd_by_session))
+            .or_default()
+            .push(run);
+    }
 
     for s in sessions {
         let source = Source::for_cli_version(s.version);
@@ -353,8 +402,16 @@ pub fn list_cli_workspaces(paths: &Paths) -> Vec<Workspace> {
                     title: s.title.clone(),
                     date: if s.updated_at != 0 { s.updated_at } else { s.created_at },
                     source,
+                    workflow_id: s.workflow.as_ref().map(|w| w.workflow_id.clone()),
                 })
                 .collect();
+            let workflows = if source == Source::Unified {
+                let mut w = runs_by_cwd.remove(&cwd).unwrap_or_default();
+                w.sort_by_key(|r| std::cmp::Reverse(r.last_activity_at));
+                w
+            } else {
+                Vec::new()
+            };
             Workspace {
                 id: format!("{}:{}", source.as_str(), base64_url_encode(&cwd)),
                 source,
@@ -362,6 +419,7 @@ pub fn list_cli_workspaces(paths: &Paths) -> Vec<Workspace> {
                 name,
                 session_count: session_summaries.len(),
                 sessions: session_summaries,
+                workflows,
             }
         })
         .collect();
