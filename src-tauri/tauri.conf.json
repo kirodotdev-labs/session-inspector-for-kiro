@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Kiro Sessions Inspector",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "identifier": "dev.kiro.sessions-inspector",
   "build": {
     "frontendDist": "../dist",
